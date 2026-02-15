@@ -1,0 +1,27 @@
+repo: owner/repo
+vision_doc: ./VISION.md
+
+thresholds:
+  duplicate_similarity: 0.85
+  aligned: 0.65
+  drifting: 0.40
+  off_vision: 0.40
+
+scoring:
+  weights:
+    has_tests: 0.25
+    ci_passing: 0.20
+    diff_size_penalty: 0.15
+    author_history: 0.15
+    description_quality: 0.15
+    review_approvals: 0.10
+
+labels:
+  duplicate: "prism:duplicate"
+  aligned: "prism:aligned"
+  drifting: "prism:drifting"
+  off_vision: "prism:off-vision"
+  top_pick: "prism:top-pick"
+
+batch_size: 50
+max_prs: 5000
