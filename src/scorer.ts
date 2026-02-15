@@ -39,13 +39,27 @@ export async function buildScorerContext(
   items: PRItem[],
   github: GitHubClient
 ): Promise<ScorerContext> {
-  const authors = [...new Set(items.map(i => i.author))];
   const authorMergeCounts = new Map<string, number>();
 
-  // Batch fetch author merge counts (rate-limit-aware)
-  for (const author of authors) {
+  // Count how many PRs each author has in the dataset
+  const authorFreq = new Map<string, number>();
+  for (const item of items) {
+    if (item.author && item.author !== "unknown") {
+      authorFreq.set(item.author, (authorFreq.get(item.author) || 0) + 1);
+    }
+  }
+
+  // Only look up the top 50 most active authors to avoid hammering search API
+  const topAuthors = [...authorFreq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 50)
+    .map(([author]) => author);
+
+  for (const author of topAuthors) {
     const count = await github.getAuthorMergeCount(author);
     authorMergeCounts.set(author, count);
+    // Respect GitHub's secondary rate limit (30 req/min for search)
+    await new Promise(r => setTimeout(r, 2100));
   }
 
   return { authorMergeCounts };
@@ -59,23 +73,40 @@ export function scorePR(
   const weights = config.scoring.weights;
   const authorMerges = context.authorMergeCounts.get(item.author) || 0;
 
+  const hasDiffStats = item.additions != null && item.deletions != null;
+
   const signals: ScoreSignals = {
-    hasTests: 0.5, // Default unknown — would need diff analysis to determine
+    hasTests: 0.5, // Would need diff analysis to determine
     ciPassing: item.ciStatus === "success" ? 1 : item.ciStatus === "failure" ? 0 : 0.5,
-    diffSize: normalizeDiffSize(item.additions || 0, item.deletions || 0),
+    diffSize: hasDiffStats ? normalizeDiffSize(item.additions!, item.deletions!) : -1,
     authorHistory: normalizeAuthorHistory(authorMerges),
     descriptionQuality: normalizeDescriptionQuality(item.body),
     reviewApprovals: Math.min(1.0, (item.reviewCount || 0) / 3),
     recency: Math.pow(0.5, (Date.now() - new Date(item.updatedAt).getTime()) / (1000 * 60 * 60 * 24 * 30)),
   };
 
+  // When diff stats aren't available, redistribute that weight proportionally
+  let effectiveWeights = { ...weights };
+  if (!hasDiffStats) {
+    const redistributed = weights.diff_size_penalty;
+    const otherTotal = 1 - redistributed;
+    effectiveWeights = {
+      has_tests: weights.has_tests / otherTotal * (1),
+      ci_passing: weights.ci_passing / otherTotal * (1),
+      diff_size_penalty: 0,
+      author_history: weights.author_history / otherTotal * (1),
+      description_quality: weights.description_quality / otherTotal * (1),
+      review_approvals: weights.review_approvals / otherTotal * (1),
+    };
+  }
+
   const score =
-    signals.hasTests * weights.has_tests +
-    signals.ciPassing * weights.ci_passing +
-    signals.diffSize * weights.diff_size_penalty +
-    signals.authorHistory * weights.author_history +
-    signals.descriptionQuality * weights.description_quality +
-    signals.reviewApprovals * weights.review_approvals;
+    signals.hasTests * effectiveWeights.has_tests +
+    signals.ciPassing * effectiveWeights.ci_passing +
+    (signals.diffSize >= 0 ? signals.diffSize : 0) * effectiveWeights.diff_size_penalty +
+    signals.authorHistory * effectiveWeights.author_history +
+    signals.descriptionQuality * effectiveWeights.description_quality +
+    signals.reviewApprovals * effectiveWeights.review_approvals;
 
   return { ...item, score, signals };
 }

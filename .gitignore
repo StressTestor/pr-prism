@@ -1,10 +1,7 @@
 node_modules/
 dist/
-data/*.db
-data/*.db-shm
-data/*.db-wal
-data/README.md
-data/VISION.md
+data/*
+!data/.gitkeep
 .env
 *.tgz
 .DS_Store
