@@ -112,13 +112,29 @@ program
     const rl = github.getRateLimit();
     console.log(chalk.dim(`API budget: ${rl.remaining}/${rl.limit} remaining`));
 
+    // Filter out items that already exist in DB with the same updated_at
+    const newItems: PRItem[] = [];
+    let skipped = 0;
+    for (const item of allItems) {
+      const existing = store.getByNumber(repoFull, item.number);
+      if (existing && existing.updatedAt === item.updatedAt) {
+        skipped++;
+      } else {
+        newItems.push(item);
+      }
+    }
+
+    if (skipped > 0) {
+      console.log(chalk.dim(`Skipping ${skipped} unchanged items, embedding ${newItems.length} new/updated`));
+    }
+
     // Embed and store
-    const embedSpinner = ora(`Embedding ${allItems.length} items...`).start();
+    const embedSpinner = ora(`Embedding ${newItems.length} items...`).start();
     const BATCH_SIZE = 10;
     let embedded = 0;
 
-    for (let i = 0; i < allItems.length; i += BATCH_SIZE) {
-      const batch = allItems.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < newItems.length; i += BATCH_SIZE) {
+      const batch = newItems.slice(i, i + BATCH_SIZE);
       const texts = batch.map(item => prepareEmbeddingText(item));
       let embeddings: number[][];
       const embedWithRetry = async (input: string[]): Promise<number[][]> => {
@@ -129,10 +145,10 @@ program
             const msg = e.message || "";
             if (msg.includes("429")) {
               const wait = 60 * (attempt + 1);
-              embedSpinner.text = `Rate limited, waiting ${wait}s... (${embedded}/${allItems.length})`;
+              embedSpinner.text = `Rate limited, waiting ${wait}s... (${embedded}/${newItems.length})`;
               await new Promise(r => setTimeout(r, wait * 1000));
             } else if (attempt < 2) {
-              embedSpinner.text = `Error (${msg.slice(0, 60)}), retry ${attempt + 1}/3... (${embedded}/${allItems.length})`;
+              embedSpinner.text = `Error (${msg.slice(0, 60)}), retry ${attempt + 1}/3... (${embedded}/${newItems.length})`;
               await new Promise(r => setTimeout(r, 5000));
             } else {
               throw e;
@@ -145,7 +161,7 @@ program
         embeddings = await embedWithRetry(texts);
       } catch {
         // Batch failed after retries — try items individually, skip failures
-        embedSpinner.text = `Batch failed, trying individually... (${embedded}/${allItems.length})`;
+        embedSpinner.text = `Batch failed, trying individually... (${embedded}/${newItems.length})`;
         embeddings = [];
         for (const text of texts) {
           try {
@@ -185,7 +201,7 @@ program
       embedSpinner.text = `Embedding... ${embedded}/${allItems.length}`;
     }
 
-    embedSpinner.succeed(`Embedded and stored ${allItems.length} items`);
+    embedSpinner.succeed(`Embedded ${newItems.length} new items (${skipped} unchanged, ${allItems.length} total)`);
 
     const stats = store.getStats(repoFull);
     console.log(chalk.bold(`\nDatabase: ${stats.prs} PRs, ${stats.issues} issues, ${stats.diffs} cached diffs`));
