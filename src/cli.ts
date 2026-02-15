@@ -578,6 +578,162 @@ program
     store.close();
   });
 
+// ── report ──────────────────────────────────────────────────────
+program
+  .command("report")
+  .description("Generate a markdown triage report")
+  .option("-r, --repo <owner/repo>", "Repository")
+  .option("-o, --output <path>", "Output file path", "prism-report.md")
+  .option("--top <number>", "Top N ranked PRs to include", "20")
+  .option("--clusters <number>", "Top N duplicate clusters to include", "25")
+  .action(async (opts) => {
+    const config = loadConfig();
+    const env = loadEnvConfig();
+    const { owner, repo } = parseRepo(opts.repo || config.repo);
+    const repoFull = `${owner}/${repo}`;
+
+    const store = new VectorStore();
+    const stats = store.getStats(repoFull);
+    const items = store.getAllItems(repoFull) as unknown as PRItem[];
+
+    if (items.length === 0) {
+      console.log(chalk.red("No data found. Run `prism scan` first."));
+      store.close();
+      return;
+    }
+
+    const spinner = ora("Generating report...").start();
+
+    // Duplicate clusters
+    const clusters = findDuplicateClusters(store, items, {
+      threshold: config.thresholds.duplicate_similarity,
+      repo: repoFull,
+    });
+    const dupeItemCount = clusters.reduce((s, c) => s + c.items.length, 0);
+
+    // Ranking
+    const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
+    spinner.text = "Building scorer context...";
+    const context = await buildScorerContext(items, github);
+    const ranked = rankPRs(items, config, context);
+
+    // Vision (if available)
+    let visionResults: { aligned: number; drifting: number; offVision: number } | null = null;
+    const embedder = createEmbeddingProvider({
+      provider: env.EMBEDDING_PROVIDER,
+      apiKey: env.EMBEDDING_API_KEY,
+      model: env.EMBEDDING_MODEL,
+    });
+
+    // Try local vision doc, then fetch from repo
+    let visionDocPath = config.vision_doc;
+    if (!visionDocPath || !existsSync(visionDocPath)) {
+      for (const candidate of ["VISION.md", "README.md"]) {
+        const content = await github.fetchFileContent(candidate);
+        if (content) {
+          const localPath = resolve(process.cwd(), "data", candidate);
+          writeFileSync(localPath, content);
+          visionDocPath = localPath;
+          break;
+        }
+      }
+    }
+
+    if (visionDocPath && existsSync(visionDocPath)) {
+      spinner.text = "Checking vision alignment...";
+      const scores = await checkVisionAlignment(store, embedder, config, visionDocPath, repoFull);
+      visionResults = {
+        aligned: scores.filter(s => s.classification === "aligned").length,
+        drifting: scores.filter(s => s.classification === "drifting").length,
+        offVision: scores.filter(s => s.classification === "off-vision").length,
+      };
+    }
+
+    // Build report
+    const topN = parseInt(opts.top) || 20;
+    const clusterN = parseInt(opts.clusters) || 25;
+    const now = new Date().toISOString().slice(0, 10);
+
+    let report = `# pr-prism triage report\n\n`;
+    report += `**repo:** ${repoFull}  \n`;
+    report += `**date:** ${now}  \n`;
+    report += `**items scanned:** ${stats.totalItems} (${stats.prs} PRs, ${stats.issues} issues)\n\n`;
+
+    // Overview
+    report += `## overview\n\n`;
+    report += `| metric | count |\n|--------|-------|\n`;
+    report += `| open PRs scanned | ${stats.prs} |\n`;
+    report += `| open issues scanned | ${stats.issues} |\n`;
+    report += `| duplicate clusters | ${clusters.length} |\n`;
+    report += `| items in duplicate clusters | ${dupeItemCount} (${(dupeItemCount / stats.totalItems * 100).toFixed(0)}% of total) |\n`;
+    if (visionResults) {
+      report += `| vision-aligned | ${visionResults.aligned} |\n`;
+      report += `| vision-drifting | ${visionResults.drifting} |\n`;
+      report += `| vision off-track | ${visionResults.offVision} |\n`;
+    }
+    report += `\n`;
+
+    // Duplicate clusters
+    report += `## duplicate clusters (top ${clusterN})\n\n`;
+    report += `these PRs/issues are similar enough to likely be duplicates. the "best pick" is the highest-quality item in each group.\n\n`;
+    report += `| # | size | avg similarity | best pick | theme |\n`;
+    report += `|---|------|---------------|-----------|-------|\n`;
+    for (const cluster of clusters.slice(0, clusterN)) {
+      const theme = cluster.theme.replace(/\|/g, "\\|").slice(0, 60);
+      report += `| ${cluster.id} | ${cluster.items.length} | ${(cluster.avgSimilarity * 100).toFixed(1)}% | [#${cluster.bestPick.number}](https://github.com/${repoFull}/pull/${cluster.bestPick.number}) | ${theme} |\n`;
+    }
+    report += `\n`;
+
+    // Largest clusters expanded
+    const bigClusters = clusters.filter(c => c.items.length >= 10).slice(0, 10);
+    if (bigClusters.length > 0) {
+      report += `## largest duplicate groups\n\n`;
+      for (const cluster of bigClusters) {
+        report += `### cluster #${cluster.id}: ${cluster.theme.slice(0, 80)} (${cluster.items.length} items)\n\n`;
+        report += `| # | author | title | updated |\n`;
+        report += `|---|--------|-------|--------|\n`;
+        for (const item of cluster.items.slice(0, 15)) {
+          const title = item.title.replace(/\|/g, "\\|").slice(0, 60);
+          report += `| [#${item.number}](https://github.com/${repoFull}/pull/${item.number}) | ${item.author || "?"} | ${title} | ${item.updatedAt.slice(0, 10)} |\n`;
+        }
+        if (cluster.items.length > 15) {
+          report += `| ... | | +${cluster.items.length - 15} more | |\n`;
+        }
+        report += `\n`;
+      }
+    }
+
+    // Top ranked PRs
+    report += `## top ${topN} ranked PRs\n\n`;
+    report += `ranked by quality signals: description quality, author track record, recency, CI status, review approvals.\n\n`;
+    report += `| rank | # | score | author | title |\n`;
+    report += `|------|---|-------|--------|-------|\n`;
+    for (let i = 0; i < Math.min(topN, ranked.length); i++) {
+      const pr = ranked[i];
+      const title = pr.title.replace(/\|/g, "\\|").slice(0, 60);
+      report += `| ${i + 1} | [#${pr.number}](https://github.com/${repoFull}/pull/${pr.number}) | ${pr.score.toFixed(2)} | ${pr.author || "?"} | ${title} |\n`;
+    }
+    report += `\n`;
+
+    // Vision alignment
+    if (visionResults) {
+      report += `## vision alignment\n\n`;
+      report += `checked against the project's README for alignment with stated goals.\n\n`;
+      report += `- **aligned:** ${visionResults.aligned} items match the project vision\n`;
+      report += `- **drifting:** ${visionResults.drifting} items are loosely related\n`;
+      report += `- **off-vision:** ${visionResults.offVision} items don't match the project direction\n`;
+      report += `\n`;
+    }
+
+    report += `---\n*generated by [pr-prism](https://github.com/StressTestor/pr-prism)*\n`;
+
+    writeFileSync(opts.output, report);
+    spinner.succeed(`Report saved to ${opts.output}`);
+
+    console.log(chalk.dim(`  ${stats.totalItems} items, ${clusters.length} duplicate clusters, top ${topN} ranked`));
+    store.close();
+  });
+
 // ── helpers ─────────────────────────────────────────────────────
 function parseDuration(s: string): string {
   const match = s.match(/^(\d+)(d|w|m)$/);
