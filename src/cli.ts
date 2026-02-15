@@ -329,7 +329,7 @@ program
     const items = store.getAllItems(repoFull) as unknown as PRItem[];
 
     const spinner = ora("Building scorer context...").start();
-    const context = await buildScorerContext(items.slice(0, 100), github);
+    const context = await buildScorerContext(items, github);
     spinner.succeed("Scorer context ready");
 
     const ranked = rankPRs(items, config, context);
