@@ -70,7 +70,7 @@ class OllamaEmbeddings implements EmbeddingProvider {
   private initialized = false;
 
   constructor(config: ProviderConfig) {
-    this.model = config.model || "nomic-embed-text";
+    this.model = config.model || "mxbai-embed-large";
     this.baseUrl = config.baseUrl || "http://localhost:11434";
   }
 
@@ -82,22 +82,31 @@ class OllamaEmbeddings implements EmbeddingProvider {
   }
 
   async embed(text: string): Promise<number[]> {
-    const resp = await fetch(`${this.baseUrl}/api/embeddings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.model, prompt: text }),
-    });
-    if (!resp.ok) throw new Error(`Ollama error (${resp.status})`);
-    const data = await resp.json() as any;
-    if (!this.initialized) {
-      this.dimensions = data.embedding.length;
-      this.initialized = true;
-    }
-    return data.embedding;
+    const [result] = await this.embedBatch([text]);
+    return result;
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    return Promise.all(texts.map(t => this.embed(t)));
+    let resp: Response;
+    try {
+      resp = await fetch(`${this.baseUrl}/api/embed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: this.model, input: texts }),
+      });
+    } catch (err: any) {
+      if (err.code === "ECONNREFUSED") {
+        throw new Error(`Ollama not running — start it with: ollama serve`);
+      }
+      throw err;
+    }
+    if (!resp.ok) throw new Error(`Ollama error (${resp.status}): ${await resp.text()}`);
+    const data = await resp.json() as any;
+    if (!this.initialized) {
+      this.dimensions = data.embeddings[0].length;
+      this.initialized = true;
+    }
+    return data.embeddings;
   }
 }
 

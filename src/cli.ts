@@ -22,7 +22,7 @@ const program = new Command();
 program
   .name("prism")
   .description("BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale")
-  .version("0.2.0");
+  .version("0.4.0");
 
 // ── helpers ─────────────────────────────────────────────────────
 export function parseDuration(s: string): string {
