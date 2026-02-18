@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import { config as loadEnv } from "dotenv";
 import { parse as parseYaml } from "yaml";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 const ScoringWeightsSchema = z.object({
   has_tests: z.number().default(0.25),
@@ -17,7 +17,6 @@ const ThresholdsSchema = z.object({
   duplicate_similarity: z.number().default(0.85),
   aligned: z.number().default(0.65),
   drifting: z.number().default(0.40),
-  off_vision: z.number().default(0.40),
 });
 
 const LabelsSchema = z.object({

@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import type { ReviewResult, LLMProvider } from "./types.js";
 
 const ReviewResultSchema = z.object({

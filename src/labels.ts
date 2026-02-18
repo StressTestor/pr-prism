@@ -40,6 +40,8 @@ export async function applyLabelActions(
     } else {
       await github.removeLabel(action.number, action.label);
     }
+    // Rate limit: 200ms between label API calls
+    await new Promise(r => setTimeout(r, 200));
   }
 
   return actions;
