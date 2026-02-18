@@ -70,7 +70,7 @@ class OllamaEmbeddings implements EmbeddingProvider {
   private initialized = false;
 
   constructor(config: ProviderConfig) {
-    this.model = config.model || "mxbai-embed-large";
+    this.model = config.model || "qwen3-embedding:0.6b";
     this.baseUrl = config.baseUrl || "http://localhost:11434";
   }
 

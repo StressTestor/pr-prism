@@ -1,6 +1,6 @@
 {
   "name": "pr-prism",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale",
   "type": "module",
   "bin": {

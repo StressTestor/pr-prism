@@ -43,14 +43,14 @@ or run the commands individually if you want more control. `npx prism scan`, `np
 
 you can run the whole thing for free with zero external API calls for embeddings:
 
-- **embeddings**: [ollama](https://ollama.com) + `mxbai-embed-large` — runs locally, no API key, no rate limits
+- **embeddings**: [ollama](https://ollama.com) + `qwen3-embedding:0.6b` — runs locally, no API key, no rate limits
 - **LLM**: [opencode zen](https://opencode.ai/zen) — kimi-k2.5-free, literally $0
 - **github**: 5000 GraphQL points/hr with a PAT (scanning 3500+ PRs uses ~36 queries)
 
 ```bash
 # install ollama and pull the model
 brew install ollama
-ollama pull mxbai-embed-large
+ollama pull qwen3-embedding:0.6b
 ```
 
 `.env.example` is already set up for this. just grab a github token and go.
@@ -142,7 +142,7 @@ single sqlite db under `data/`. embeddings stored as vectors via sqlite-vec. dif
 ## notes
 
 - first scan of ~3500 PRs via GraphQL takes ~3 min (mostly pagination + author history lookups)
-- embedding ~7000 items with ollama locally takes ~10-20 min depending on your hardware
+- embedding ~7000 items with ollama locally takes ~80 min on M1 Air (batch size auto-scales to 50 for local models)
 - after that its incremental, only embeds new/changed items
 - clustering is fast, bottleneck is always the embedding step on first run
 - if you switch embedding providers, run `npx prism reset` first (different providers = different dimensions)
