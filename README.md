@@ -102,6 +102,24 @@ npx prism dupes --dry-run           # preview first
 
 read-only by default. always.
 
+## json output
+
+every command supports `--json` for machine-readable NDJSON output. pipe it to jq, feed it to CI, whatever.
+
+```bash
+npx prism dupes --json | jq '.bestPick'
+npx prism rank --json > ranked.jsonl
+npx prism status --json
+```
+
+## scoring transparency
+
+```bash
+npx prism rank --explain           # shows signal breakdown per PR
+```
+
+the explain view shows weighted contribution of each signal: tests, CI, diff size, author history, description quality, review approvals, recency.
+
 ## scan modes
 
 default scan uses GitHub's GraphQL API — pulls PRs with CI status, review counts, changed files, and test detection all in a single paginated query. a repo with 3500+ open PRs takes ~36 queries instead of ~14,000 REST calls.

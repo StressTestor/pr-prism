@@ -1,8 +1,8 @@
-import { describe, expect, it, afterEach } from "vitest";
-import { VectorStore } from "../store.js";
-import { resolve } from "node:path";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { VectorStore } from "../store.js";
 
 function tmpDb(): string {
   const dir = resolve(tmpdir(), `prism-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
