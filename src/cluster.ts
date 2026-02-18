@@ -1,18 +1,8 @@
+import { cosineSimilarity, isZeroVector } from "./similarity.js";
 import type { VectorStore } from "./store.js";
 import type { Cluster, PRItem, ScoredPR, ScoreSignals } from "./types.js";
 
-export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  let dot = 0,
-    normA = 0,
-    normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom === 0 ? 0 : dot / denom;
-}
+export { cosineSimilarity } from "./similarity.js";
 
 function recencyFactor(updatedAt: string): number {
   const ageMs = Date.now() - new Date(updatedAt).getTime();
@@ -26,7 +16,22 @@ export interface ClusterOptions {
 }
 
 export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts: ClusterOptions): Cluster[] {
-  const embeddings = store.getAllEmbeddings(opts.repo);
+  const allEmbeddings = store.getAllEmbeddings(opts.repo);
+
+  // Filter out zero vectors (failed embeddings)
+  const embeddings = new Map<string, Float32Array>();
+  let zeroCount = 0;
+  for (const [id, emb] of allEmbeddings) {
+    if (isZeroVector(emb)) {
+      zeroCount++;
+    } else {
+      embeddings.set(id, emb);
+    }
+  }
+  if (zeroCount > 0) {
+    console.warn(`warning: ${zeroCount} items have zero-vector embeddings and were excluded from clustering`);
+  }
+
   const itemMap = new Map<string, PRItem>();
   for (const item of items) {
     itemMap.set(`${opts.repo}:${item.type}:${item.number}`, item);

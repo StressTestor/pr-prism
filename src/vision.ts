@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { PrismConfig } from "./config.js";
+import { cosineSimilarity, isZeroVector } from "./similarity.js";
 import type { VectorStore } from "./store.js";
 import type { EmbeddingProvider, VisionScore } from "./types.js";
 
@@ -33,19 +34,6 @@ function splitByHeadings(doc: string): Array<{ heading: string; text: string }> 
   }
 
   return sections.filter((s) => s.text.length > 20);
-}
-
-function cosineSim(a: number[], b: number[]): number {
-  let dot = 0,
-    normA = 0,
-    normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom === 0 ? 0 : dot / denom;
 }
 
 export async function loadAndEmbedVisionDoc(docPath: string, embedder: EmbeddingProvider): Promise<VisionChunk[]> {
@@ -90,7 +78,7 @@ export function scoreVisionAlignment(
   let matchedSection = "";
 
   for (const chunk of visionChunks) {
-    const sim = cosineSim(prEmbedding, chunk.embedding);
+    const sim = cosineSimilarity(prEmbedding, chunk.embedding);
     if (sim > maxSim) {
       maxSim = sim;
       matchedSection = chunk.heading;
@@ -128,7 +116,7 @@ export async function checkVisionAlignment(
 
   for (const item of items) {
     const emb = store.getEmbedding(item.id);
-    if (!emb) continue;
+    if (!emb || isZeroVector(emb)) continue;
 
     const prEmbedding = Array.from(emb);
     const score = scoreVisionAlignment(prEmbedding, visionChunks, config);

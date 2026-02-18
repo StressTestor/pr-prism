@@ -9,11 +9,11 @@ export class VectorStore {
   private dimensions: number;
   private embeddingModel?: string;
 
-  constructor(dbPath?: string, dimensions = 1536, embeddingModel?: string) {
+  constructor(dbPath?: string, dimensions?: number, embeddingModel?: string) {
     const p = dbPath || resolve(process.cwd(), "data", "prism.db");
     mkdirSync(resolve(p, ".."), { recursive: true });
     this.db = new Database(p);
-    this.dimensions = dimensions;
+    this.dimensions = dimensions ?? 0;
     this.embeddingModel = embeddingModel;
     this.init();
   }
@@ -30,7 +30,7 @@ export class VectorStore {
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vec_items'")
       .get() as any;
 
-    if (tableCheck) {
+    if (tableCheck && this.dimensions > 0) {
       const row = this.db.prepare("SELECT embedding FROM vec_items LIMIT 1").get() as any;
       if (row) {
         const existingDim = new Float32Array(row.embedding.buffer).length;
@@ -41,6 +41,12 @@ export class VectorStore {
               `run \`prism re-embed\` to re-embed with current provider, or \`prism reset\` to start fresh.`,
           );
         }
+      }
+    } else if (tableCheck && this.dimensions === 0) {
+      // Read-only mode: detect dimensions from existing data
+      const row = this.db.prepare("SELECT embedding FROM vec_items LIMIT 1").get() as any;
+      if (row) {
+        this.dimensions = new Float32Array(row.embedding.buffer).length;
       }
     }
 
@@ -77,14 +83,19 @@ export class VectorStore {
         PRIMARY KEY (number, repo)
       );
 
-      CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
-        id TEXT PRIMARY KEY,
-        embedding float[${this.dimensions}]
-      );
-
       CREATE INDEX IF NOT EXISTS idx_items_repo ON items(repo);
       CREATE INDEX IF NOT EXISTS idx_items_number ON items(number, repo);
     `);
+
+    // Only create vec_items if we know the dimensions
+    if (this.dimensions > 0) {
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
+          id TEXT PRIMARY KEY,
+          embedding float[${this.dimensions}]
+        );
+      `);
+    }
   }
 
   getMeta(key: string): string | undefined {

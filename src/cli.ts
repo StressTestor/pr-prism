@@ -22,7 +22,7 @@ const program = new Command();
 program
   .name("prism")
   .description("BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale")
-  .version("0.5.0");
+  .version("0.6.0");
 
 // ── helpers ─────────────────────────────────────────────────────
 export function parseDuration(s: string): string {
@@ -45,6 +45,7 @@ interface PipelineContext {
   repoFull: string;
   github: GitHubClient;
   store: VectorStore;
+  embedder: import("./types.js").EmbeddingProvider;
 }
 
 async function createPipelineContext(repoOverride?: string): Promise<PipelineContext> {
@@ -59,10 +60,13 @@ async function createPipelineContext(repoOverride?: string): Promise<PipelineCon
     model: env.EMBEDDING_MODEL,
   });
   const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL);
-  return { config, env, owner, repo, repoFull, github, store };
+  return { config, env, owner, repo, repoFull, github, store, embedder };
 }
 
-export async function runScan(ctx: PipelineContext, opts: { since?: string; state?: string; useRest?: boolean }) {
+export async function runScan(
+  ctx: PipelineContext,
+  opts: { since?: string; state?: string; useRest?: boolean; json?: boolean },
+) {
   const { config, env, repoFull, github, store } = ctx;
   const since = opts.since ? parseDuration(opts.since) : undefined;
   const states = (opts.state || "open").split(",") as Array<"open" | "closed">;
@@ -142,11 +146,7 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
   }
 
   // Embed and store
-  const embedder = await createEmbeddingProvider({
-    provider: env.EMBEDDING_PROVIDER,
-    apiKey: env.EMBEDDING_API_KEY,
-    model: env.EMBEDDING_MODEL,
-  });
+  const { embedder } = ctx;
 
   // Store embedding metadata on first scan
   if (!store.getMeta("embedding_model")) {
@@ -158,6 +158,7 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
   const embedSpinner = ora(`Embedding ${newItems.length} items...`).start();
   const BATCH_SIZE = env.EMBEDDING_PROVIDER === "ollama" ? 50 : 10;
   let embedded = 0;
+  let zeroVectors = 0;
 
   for (let i = 0; i < newItems.length; i += BATCH_SIZE) {
     const batch = newItems.slice(i, i + BATCH_SIZE);
@@ -201,6 +202,12 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
 
     for (let j = 0; j < batch.length; j++) {
       const item = batch[j];
+      const embedding = new Float32Array(embeddings[j]);
+
+      // Detect zero-vector failures
+      const isZero = embedding.every((v) => v === 0);
+      if (isZero) zeroVectors++;
+
       const storeItem: StoreItem = {
         id: `${repoFull}:${item.type}:${item.number}`,
         type: item.type,
@@ -208,7 +215,7 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
         repo: repoFull,
         title: item.title,
         bodySnippet: item.body.slice(0, 500),
-        embedding: new Float32Array(embeddings[j]),
+        embedding,
         metadata: {
           author: item.author,
           state: item.state,
@@ -223,6 +230,7 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       };
+      // Per-item commit — crash-safe, already-embedded items persist
       store.upsert(storeItem);
     }
 
@@ -230,15 +238,33 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
     embedSpinner.text = `Embedding... ${embedded}/${newItems.length}`;
   }
 
-  embedSpinner.succeed(`Embedded ${newItems.length} new items (${skipped} unchanged, ${allItems.length} total)`);
+  let embedMsg = `Embedded ${newItems.length} new items (${skipped} unchanged, ${allItems.length} total)`;
+  if (zeroVectors > 0) {
+    embedMsg += chalk.yellow(` (${zeroVectors} failed with zero vectors — excluded from clustering)`);
+  }
+  embedSpinner.succeed(embedMsg);
 
   const stats = store.getStats(repoFull);
-  console.log(chalk.bold(`\nDatabase: ${stats.prs} PRs, ${stats.issues} issues, ${stats.diffs} cached diffs`));
+
+  if (opts.json) {
+    console.log(
+      JSON.stringify({
+        command: "scan",
+        repo: repoFull,
+        newItems: newItems.length,
+        skipped,
+        total: allItems.length,
+        ...stats,
+      }),
+    );
+  } else {
+    console.log(chalk.bold(`\nDatabase: ${stats.prs} PRs, ${stats.issues} issues, ${stats.diffs} cached diffs`));
+  }
 }
 
 export async function runDupes(
   ctx: PipelineContext,
-  opts: { threshold?: number; applyLabels?: boolean; dryRun?: boolean },
+  opts: { threshold?: number; applyLabels?: boolean; dryRun?: boolean; json?: boolean },
 ) {
   const { config, env, owner, repo, repoFull, store } = ctx;
   const threshold = opts.threshold ?? config.thresholds.duplicate_similarity;
@@ -253,6 +279,22 @@ export async function runDupes(
 
   const clusters = findDuplicateClusters(store, items, { threshold, repo: repoFull });
   spinner.succeed(`Found ${clusters.length} duplicate clusters`);
+
+  if (opts.json) {
+    for (const c of clusters) {
+      console.log(
+        JSON.stringify({
+          id: c.id,
+          size: c.items.length,
+          avgSimilarity: c.avgSimilarity,
+          bestPick: c.bestPick.number,
+          theme: c.theme,
+          items: c.items.map((i) => ({ number: i.number, type: i.type, title: i.title, score: i.score })),
+        }),
+      );
+    }
+    return clusters;
+  }
 
   const table = new Table({
     head: ["#", "Size", "Avg Sim", "Best Pick", "Theme"],
@@ -304,7 +346,7 @@ export async function runDupes(
   return clusters;
 }
 
-export async function runRank(ctx: PipelineContext, opts: { top?: number }) {
+export async function runRank(ctx: PipelineContext, opts: { top?: number; explain?: boolean; json?: boolean }) {
   const { config, repoFull, github, store } = ctx;
   const items = store.getAllItems(repoFull) as unknown as PRItem[];
 
@@ -320,6 +362,22 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number }) {
   const ranked = rankPRs(items, config, context);
   const top = ranked.slice(0, opts.top || 20);
 
+  if (opts.json) {
+    for (const pr of top) {
+      console.log(
+        JSON.stringify({
+          number: pr.number,
+          type: pr.type,
+          score: pr.score,
+          author: pr.author,
+          title: pr.title,
+          signals: pr.signals,
+        }),
+      );
+    }
+    return ranked;
+  }
+
   const table = new Table({
     head: ["Rank", "#", "Score", "Author", "Title"],
     colWidths: [6, 8, 8, 16, 50],
@@ -330,10 +388,39 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number }) {
   });
 
   console.log(table.toString());
+
+  if (opts.explain) {
+    const weights = config.scoring.weights;
+    console.log(chalk.bold("\nsignal breakdown:\n"));
+    const explainTable = new Table({
+      head: ["#", "Tests", "CI", "Diff", "Author", "Desc", "Reviews", "Recency", "Total"],
+      colWidths: [8, 8, 8, 8, 8, 8, 8, 8, 8],
+    });
+    for (const pr of top) {
+      const s = pr.signals;
+      const hasDiff = s.diffSize >= 0;
+      explainTable.push([
+        pr.number,
+        (s.hasTests * weights.has_tests).toFixed(2),
+        (s.ciPassing * weights.ci_passing).toFixed(2),
+        hasDiff ? (s.diffSize * weights.diff_size_penalty).toFixed(2) : "n/a",
+        (s.authorHistory * weights.author_history).toFixed(2),
+        (s.descriptionQuality * weights.description_quality).toFixed(2),
+        (s.reviewApprovals * weights.review_approvals).toFixed(2),
+        (s.recency * 0.05).toFixed(2),
+        pr.score.toFixed(2),
+      ]);
+    }
+    console.log(explainTable.toString());
+  }
+
   return ranked;
 }
 
-export async function runVision(ctx: PipelineContext, opts: { doc?: string; applyLabels?: boolean; dryRun?: boolean }) {
+export async function runVision(
+  ctx: PipelineContext,
+  opts: { doc?: string; applyLabels?: boolean; dryRun?: boolean; json?: boolean },
+) {
   const { config, env, owner, repo, repoFull, github, store } = ctx;
   let docPath = opts.doc || config.vision_doc;
 
@@ -355,15 +442,16 @@ export async function runVision(ctx: PipelineContext, opts: { doc?: string; appl
     }
   }
 
-  const embedder = await createEmbeddingProvider({
-    provider: env.EMBEDDING_PROVIDER,
-    apiKey: env.EMBEDDING_API_KEY,
-    model: env.EMBEDDING_MODEL,
-  });
-
   const spinner = ora("Checking vision alignment...").start();
-  const scores = await checkVisionAlignment(store, embedder, config, docPath, repoFull);
+  const scores = await checkVisionAlignment(store, ctx.embedder, config, docPath, repoFull);
   spinner.succeed("Vision alignment checked");
+
+  if (opts.json) {
+    for (const s of scores) {
+      console.log(JSON.stringify(s));
+    }
+    return scores;
+  }
 
   const aligned = scores.filter((s) => s.classification === "aligned");
   const drifting = scores.filter((s) => s.classification === "drifting");
@@ -478,10 +566,11 @@ program
   .option("-s, --since <duration>", "Only fetch items updated within duration (e.g., 7d, 2w, 1m)")
   .option("--state <states>", "PR states to fetch (open,closed)", "open")
   .option("--rest", "Use REST API instead of GraphQL (no deep scan signals)")
+  .option("--json", "Output results as NDJSON")
   .action(async (opts) => {
     const ctx = await createPipelineContext(opts.repo);
     try {
-      await runScan(ctx, { since: opts.since, state: opts.state, useRest: opts.rest });
+      await runScan(ctx, { since: opts.since, state: opts.state, useRest: opts.rest, json: opts.json });
     } finally {
       ctx.store.close();
     }
@@ -496,6 +585,7 @@ program
   .option("--cluster <id>", "Show specific cluster details")
   .option("--apply-labels", "Apply labels to GitHub")
   .option("--dry-run", "Show what would be labeled without applying")
+  .option("--json", "Output results as NDJSON")
   .action(async (opts) => {
     const ctx = await createPipelineContext(opts.repo);
     try {
@@ -525,6 +615,7 @@ program
           threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
           applyLabels: opts.applyLabels,
           dryRun: opts.dryRun,
+          json: opts.json,
         });
       }
     } finally {
@@ -537,11 +628,13 @@ program
   .command("rank")
   .description("Score and rank PRs by quality signals")
   .option("-n, --top <number>", "Show top N results", "20")
+  .option("--explain", "Show signal breakdown per PR")
+  .option("--json", "Output results as NDJSON")
   .option("-r, --repo <owner/repo>", "Repository")
   .action(async (opts) => {
     const ctx = await createPipelineContext(opts.repo);
     try {
-      await runRank(ctx, { top: parseInt(opts.top, 10) || 20 });
+      await runRank(ctx, { top: parseInt(opts.top, 10) || 20, explain: opts.explain, json: opts.json });
     } finally {
       ctx.store.close();
     }
@@ -555,10 +648,11 @@ program
   .option("-r, --repo <owner/repo>", "Repository")
   .option("--apply-labels", "Apply alignment labels")
   .option("--dry-run", "Show what would be labeled")
+  .option("--json", "Output results as NDJSON")
   .action(async (opts) => {
     const ctx = await createPipelineContext(opts.repo);
     try {
-      await runVision(ctx, { doc: opts.doc, applyLabels: opts.applyLabels, dryRun: opts.dryRun });
+      await runVision(ctx, { doc: opts.doc, applyLabels: opts.applyLabels, dryRun: opts.dryRun, json: opts.json });
     } finally {
       ctx.store.close();
     }
@@ -756,21 +850,26 @@ program
   .command("status")
   .description("Show database stats and rate limit info")
   .option("-r, --repo <owner/repo>", "Repository")
+  .option("--json", "Output results as NDJSON")
   .action(async (opts) => {
     const config = loadConfig();
     const env = loadEnvConfig();
     const { owner, repo } = parseRepo(opts.repo || config.repo);
     const repoFull = `${owner}/${repo}`;
 
-    const store = new VectorStore();
+    // Open store in read-only mode — no dimension or model validation
+    const store = new VectorStore(undefined, undefined);
     const stats = store.getStats(repoFull);
+    const embModel = store.getMeta("embedding_model") || "unknown";
+    const embDims = store.getMeta("embedding_dimensions") || "?";
 
     console.log(chalk.bold("pr-prism status\n"));
     console.log(`  Repo:     ${repoFull}`);
     console.log(`  PRs:      ${stats.prs}`);
     console.log(`  Issues:   ${stats.issues}`);
     console.log(`  Diffs:    ${stats.diffs} cached`);
-    console.log(`  Total:    ${stats.totalItems} items\n`);
+    console.log(`  Total:    ${stats.totalItems} items`);
+    console.log(`  Model:    ${embModel} (${embDims} dims)\n`);
 
     const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
     try {
@@ -782,8 +881,22 @@ program
       console.log(chalk.yellow("  API:      Could not check rate limit"));
     }
 
-    console.log(`  Provider: ${env.EMBEDDING_PROVIDER} (${env.EMBEDDING_MODEL})`);
-    console.log(`  LLM:      ${env.LLM_PROVIDER} (${env.LLM_MODEL})`);
+    if (opts.json) {
+      console.log(
+        JSON.stringify({
+          command: "status",
+          repo: repoFull,
+          ...stats,
+          embeddingModel: embModel,
+          embeddingDimensions: embDims,
+          provider: env.EMBEDDING_PROVIDER,
+          llmProvider: env.LLM_PROVIDER,
+        }),
+      );
+    } else {
+      console.log(`  Provider: ${env.EMBEDDING_PROVIDER} (${env.EMBEDDING_MODEL})`);
+      console.log(`  LLM:      ${env.LLM_PROVIDER} (${env.LLM_MODEL})`);
+    }
 
     store.close();
   });
@@ -796,18 +909,10 @@ program
   .option("-o, --output <path>", "Output file path", "prism-report.md")
   .option("--top <number>", "Top N ranked PRs to include", "20")
   .option("--clusters <number>", "Top N duplicate clusters to include", "25")
+  .option("--json", "Output report as JSON")
   .action(async (opts) => {
-    const config = loadConfig();
-    const env = loadEnvConfig();
-    const { owner, repo } = parseRepo(opts.repo || config.repo);
-    const repoFull = `${owner}/${repo}`;
-
-    const embedder = await createEmbeddingProvider({
-      provider: env.EMBEDDING_PROVIDER,
-      apiKey: env.EMBEDDING_API_KEY,
-      model: env.EMBEDDING_MODEL,
-    });
-    const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL);
+    const ctx = await createPipelineContext(opts.repo);
+    const { config, repoFull, github, store, embedder } = ctx;
     const stats = store.getStats(repoFull);
     const items = store.getAllItems(repoFull) as unknown as PRItem[];
 
@@ -825,7 +930,6 @@ program
     });
     const dupeItemCount = clusters.reduce((s, c) => s + c.items.length, 0);
 
-    const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
     spinner.text = "Building scorer context...";
     const context = await buildScorerContext(items, github);
     const ranked = rankPRs(items, config, context);
@@ -858,6 +962,34 @@ program
     const topN = parseInt(opts.top, 10) || 20;
     const clusterN = parseInt(opts.clusters, 10) || 25;
     const now = new Date().toISOString().slice(0, 10);
+
+    if (opts.json) {
+      console.log(
+        JSON.stringify({
+          command: "report",
+          repo: repoFull,
+          date: now,
+          stats,
+          clusters: clusters.slice(0, clusterN).map((c) => ({
+            id: c.id,
+            size: c.items.length,
+            avgSimilarity: c.avgSimilarity,
+            bestPick: c.bestPick.number,
+            theme: c.theme,
+          })),
+          ranked: ranked.slice(0, topN).map((pr) => ({
+            number: pr.number,
+            score: pr.score,
+            author: pr.author,
+            title: pr.title,
+          })),
+          vision: visionResults,
+        }),
+      );
+      spinner.succeed("Report generated (JSON)");
+      store.close();
+      return;
+    }
 
     let report = `# pr-prism triage report\n\n`;
     report += `**repo:** ${repoFull}  \n`;

@@ -71,13 +71,27 @@ export class GitHubClient {
       try {
         return await fn();
       } catch (err: any) {
+        // 429 rate limit — wait and retry
+        if (err.status === 429) {
+          const retryAfter = parseInt(err.response?.headers?.["retry-after"] || "60", 10);
+          const waitMs = retryAfter * 1000;
+          console.warn(`Rate limited (429). Waiting ${retryAfter}s...`);
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+        // 403 with rate limit exhausted — wait for reset
         if (err.status === 403 && this.rateLimit.remaining === 0) {
           const waitMs = Math.max(0, this.rateLimit.resetAt.getTime() - Date.now()) + 1000;
           console.warn(`Rate limited. Waiting ${Math.ceil(waitMs / 1000)}s until reset...`);
           await new Promise((r) => setTimeout(r, waitMs));
           continue;
         }
-        if (err.status === 403 && attempt < 2) {
+        // 403 permission error (not rate limit) — fail immediately
+        if (err.status === 403) {
+          throw err;
+        }
+        // Other transient errors — retry with backoff
+        if (attempt < 2 && (err.status === 502 || err.status === 503 || err.status === 500)) {
           const delay = (attempt + 1) * 5000;
           await new Promise((r) => setTimeout(r, delay));
           continue;
