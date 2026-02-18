@@ -38,7 +38,7 @@ export class GitHubClient {
     }
   }
 
-  private async withBackoff<T>(fn: () => Promise<T>): Promise<T> {
+  async withBackoff<T>(fn: () => Promise<T>): Promise<T> {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         return await fn();
@@ -136,7 +136,6 @@ export class GitHubClient {
       if (response.data.length === 0) break;
 
       for (const issue of response.data) {
-        // Skip pull requests (GitHub includes them in issues endpoint)
         if (issue.pull_request) continue;
 
         if (since && new Date(issue.updated_at) < new Date(since)) {
@@ -165,10 +164,69 @@ export class GitHubClient {
     return items;
   }
 
+  async getPR(prNumber: number): Promise<PRItem> {
+    const response = await this.withBackoff(() =>
+      this.octokit.pulls.get({
+        owner: this.owner,
+        repo: this.repo,
+        pull_number: prNumber,
+      })
+    );
+    this.updateRateLimit(response.headers as Record<string, string>);
+    const pr = response.data;
+    return {
+      number: pr.number,
+      type: "pr",
+      repo: `${this.owner}/${this.repo}`,
+      title: pr.title,
+      body: pr.body || "",
+      state: pr.state,
+      author: pr.user?.login || "unknown",
+      createdAt: pr.created_at,
+      updatedAt: pr.updated_at,
+      labels: pr.labels.map(l => (typeof l === "string" ? l : l.name || "")),
+      diffUrl: pr.diff_url,
+      additions: pr.additions,
+      deletions: pr.deletions,
+      changedFiles: pr.changed_files,
+    };
+  }
+
+  async fetchReviewCount(prNumber: number): Promise<number> {
+    try {
+      const response = await this.withBackoff(() =>
+        this.octokit.pulls.listReviews({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: prNumber,
+        })
+      );
+      this.updateRateLimit(response.headers as Record<string, string>);
+      return response.data.length;
+    } catch {
+      return 0;
+    }
+  }
+
+  async fetchChangedFiles(prNumber: number): Promise<string[]> {
+    try {
+      const response = await this.withBackoff(() =>
+        this.octokit.pulls.listFiles({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: prNumber,
+        })
+      );
+      this.updateRateLimit(response.headers as Record<string, string>);
+      return response.data.map(f => f.filename);
+    } catch {
+      return [];
+    }
+  }
+
   async fetchDiff(prNumber: number, store?: VectorStore): Promise<string> {
     const repoFull = `${this.owner}/${this.repo}`;
 
-    // Check cache first
     if (store) {
       const cached = store.getCachedDiff(repoFull, prNumber);
       if (cached) return cached;
@@ -187,13 +245,11 @@ export class GitHubClient {
 
     let diff = response.data as unknown as string;
 
-    // Truncate large diffs (>500KB) with warning
     const MAX_DIFF = 500_000;
     if (diff.length > MAX_DIFF) {
       diff = diff.slice(0, MAX_DIFF) + "\n\n[TRUNCATED — diff exceeded 500KB]";
     }
 
-    // Cache it
     if (store) {
       store.cacheDiff(repoFull, prNumber, diff);
     }
@@ -253,7 +309,7 @@ export class GitHubClient {
         })
       );
     } catch {
-      // Label might not exist, ignore
+      // Label might not exist
     }
   }
 
@@ -277,13 +333,13 @@ export class GitHubClient {
 
   async getAuthorMergeCount(author: string): Promise<number> {
     try {
-      const { data } = await this.withBackoff(() =>
+      const response = await this.withBackoff(() =>
         this.octokit.search.issuesAndPullRequests({
           q: `repo:${this.owner}/${this.repo} type:pr author:${author} is:merged`,
         })
       );
-      this.updateRateLimit({} as any);
-      return data.total_count;
+      this.updateRateLimit(response.headers as Record<string, string>);
+      return response.data.total_count;
     } catch {
       return 0;
     }
@@ -308,8 +364,6 @@ export class GitHubClient {
   }
 
   estimateAPICallsNeeded(totalPRs: number): number {
-    // Listing: ceil(totalPRs / 100) calls
-    // Plus ~1 call per PR for diff fetching (if needed)
     return Math.ceil(totalPRs / 100) + totalPRs;
   }
 

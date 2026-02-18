@@ -17,6 +17,7 @@ export interface PRItem {
   deletions?: number;
   changedFiles?: number;
   hasMergeConflicts?: boolean;
+  hasTests?: boolean;
 }
 
 export interface ScoredPR extends PRItem {

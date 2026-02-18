@@ -1,7 +1,7 @@
 import type { VectorStore } from "./store.js";
 import type { Cluster, ScoredPR, PRItem, ScoreSignals } from "./types.js";
 
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   let dot = 0, normA = 0, normB = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
@@ -15,7 +15,6 @@ function cosineSimilarity(a: Float32Array, b: Float32Array): number {
 function recencyFactor(updatedAt: string): number {
   const ageMs = Date.now() - new Date(updatedAt).getTime();
   const ageDays = ageMs / (1000 * 60 * 60 * 24);
-  // Exponential decay: half-life of 30 days
   return Math.pow(0.5, ageDays / 30);
 }
 
@@ -35,7 +34,6 @@ export function findDuplicateClusters(
     itemMap.set(`${opts.repo}:${item.type}:${item.number}`, item);
   }
 
-  // Build adjacency list
   const ids = [...embeddings.keys()];
   const adjacency = new Map<string, Set<string>>();
 
@@ -53,10 +51,8 @@ export function findDuplicateClusters(
     }
   }
 
-  // Extract connected components via BFS
   const visited = new Set<string>();
   const clusters: Cluster[] = [];
-  let clusterId = 0;
 
   for (const id of ids) {
     if (visited.has(id) || !adjacency.has(id)) continue;
@@ -75,7 +71,6 @@ export function findDuplicateClusters(
 
     if (component.length < 2) continue;
 
-    // Convert to ScoredPRs with recency-weighted scores
     const clusterItems: ScoredPR[] = component
       .map(cid => {
         const item = itemMap.get(cid);
@@ -97,7 +92,6 @@ export function findDuplicateClusters(
 
     if (clusterItems.length < 2) continue;
 
-    // Calculate average similarity within cluster
     let totalSim = 0, pairs = 0;
     for (let i = 0; i < component.length; i++) {
       for (let j = i + 1; j < component.length; j++) {
@@ -109,13 +103,17 @@ export function findDuplicateClusters(
     }
 
     clusters.push({
-      id: ++clusterId,
+      id: 0, // reassigned below
       items: clusterItems,
       bestPick: clusterItems[0],
       avgSimilarity: pairs > 0 ? totalSim / pairs : 0,
-      theme: clusterItems[0].title, // Use best pick's title as theme
+      theme: clusterItems[0].title,
     });
   }
 
-  return clusters.sort((a, b) => b.items.length - a.items.length);
+  // Sort by size descending, then assign sequential IDs
+  clusters.sort((a, b) => b.items.length - a.items.length);
+  clusters.forEach((c, i) => { c.id = i + 1; });
+
+  return clusters;
 }

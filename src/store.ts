@@ -20,6 +20,25 @@ export class VectorStore {
     sqliteVec.load(this.db);
     this.db.pragma("journal_mode = WAL");
 
+    // Validate dimensions if vec_items already exists
+    const tableCheck = this.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_items'"
+    ).get() as any;
+
+    if (tableCheck) {
+      const row = this.db.prepare("SELECT embedding FROM vec_items LIMIT 1").get() as any;
+      if (row) {
+        const existingDim = new Float32Array(row.embedding.buffer).length;
+        if (existingDim !== this.dimensions) {
+          this.db.close();
+          throw new Error(
+            `Dimension mismatch: database has ${existingDim}-dim embeddings but provider uses ${this.dimensions}. ` +
+            `Run \`prism reset\` to clear the database and re-scan.`
+          );
+        }
+      }
+    }
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS items (
         id TEXT PRIMARY KEY,
@@ -65,7 +84,6 @@ export class VectorStore {
     `).run(id, item.type, item.number, item.repo, item.title, item.bodySnippet,
       JSON.stringify(item.metadata), item.createdAt, item.updatedAt);
 
-    // Upsert vector - delete then insert since vec0 doesn't support ON CONFLICT
     this.db.prepare("DELETE FROM vec_items WHERE id = ?").run(id);
     this.db.prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)").run(
       id,
@@ -82,11 +100,9 @@ export class VectorStore {
       LIMIT ?
     `).all(Buffer.from(embedding.buffer), limit) as Array<{ id: string; distance: number }>;
 
-    // sqlite-vec returns L2 distance; convert to cosine similarity approx for filtering
-    return rows.filter(r => {
-      const cosineSim = 1 - (r.distance * r.distance) / 2;
-      return cosineSim >= threshold;
-    });
+    // sqlite-vec returns cosine distance when using vec0 with float arrays
+    // cosine similarity = 1 - cosine distance
+    return rows.filter(r => (1 - r.distance) >= threshold);
   }
 
   getItem(id: string): StoreItem | undefined {
@@ -99,7 +115,7 @@ export class VectorStore {
       repo: row.repo,
       title: row.title,
       bodySnippet: row.body_snippet,
-      embedding: new Float32Array(0), // not loaded from items table
+      embedding: new Float32Array(0),
       metadata: JSON.parse(row.metadata_json),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -138,7 +154,6 @@ export class VectorStore {
         metadata,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
-        // Unpack metadata for PRItem compatibility
         author: metadata.author,
         state: metadata.state,
         labels: metadata.labels,
@@ -147,6 +162,7 @@ export class VectorStore {
         changedFiles: metadata.changedFiles,
         ciStatus: metadata.ciStatus,
         reviewCount: metadata.reviewCount,
+        hasTests: metadata.hasTests,
         body: row.body_snippet,
       };
     });

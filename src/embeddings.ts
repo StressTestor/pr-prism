@@ -29,7 +29,6 @@ class OpenAIEmbeddings implements EmbeddingProvider {
   async embedBatch(texts: string[]): Promise<number[][]> {
     const sanitized = texts.map(t => {
       if (!t || typeof t !== "string") return " ";
-      // Strip null bytes, control chars (except newline/tab), and ensure valid UTF-8
       return t.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim() || " ";
     });
     const resp = await fetch(`${this.baseUrl}/embeddings`, {
@@ -51,14 +50,13 @@ class OpenAIEmbeddings implements EmbeddingProvider {
 
 class KimiEmbeddings implements EmbeddingProvider {
   private inner: OpenAIEmbeddings;
-  dimensions = 1536;
+  dimensions = 1024;
 
   constructor(config: ProviderConfig) {
     this.inner = new OpenAIEmbeddings({
       ...config,
       baseUrl: "https://api.moonshot.cn/v1",
     });
-    this.dimensions = this.inner.dimensions;
   }
 
   embed(text: string) { return this.inner.embed(text); }
@@ -68,11 +66,19 @@ class KimiEmbeddings implements EmbeddingProvider {
 class OllamaEmbeddings implements EmbeddingProvider {
   private model: string;
   private baseUrl: string;
-  dimensions = 1536; // varies by model
+  dimensions = 0; // set by init()
+  private initialized = false;
 
   constructor(config: ProviderConfig) {
     this.model = config.model || "nomic-embed-text";
     this.baseUrl = config.baseUrl || "http://localhost:11434";
+  }
+
+  async init(): Promise<void> {
+    if (this.initialized) return;
+    const probe = await this.embed("dimension probe");
+    this.dimensions = probe.length;
+    this.initialized = true;
   }
 
   async embed(text: string): Promise<number[]> {
@@ -83,12 +89,14 @@ class OllamaEmbeddings implements EmbeddingProvider {
     });
     if (!resp.ok) throw new Error(`Ollama error (${resp.status})`);
     const data = await resp.json() as any;
-    this.dimensions = data.embedding.length;
+    if (!this.initialized) {
+      this.dimensions = data.embedding.length;
+      this.initialized = true;
+    }
     return data.embedding;
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    // Ollama doesn't support batch — sequential fallback
     return Promise.all(texts.map(t => this.embed(t)));
   }
 }
@@ -141,11 +149,15 @@ class JinaEmbeddings implements EmbeddingProvider {
   embedBatch(texts: string[]) { return this.inner.embedBatch(texts); }
 }
 
-export function createEmbeddingProvider(config: ProviderConfig): EmbeddingProvider {
+export async function createEmbeddingProvider(config: ProviderConfig): Promise<EmbeddingProvider> {
   switch (config.provider) {
     case "openai": return new OpenAIEmbeddings(config);
     case "kimi": return new KimiEmbeddings(config);
-    case "ollama": return new OllamaEmbeddings(config);
+    case "ollama": {
+      const provider = new OllamaEmbeddings(config);
+      await provider.init();
+      return provider;
+    }
     case "voyageai": return new VoyageEmbeddings(config);
     case "jina": return new JinaEmbeddings(config);
     default: throw new Error(`Unknown embedding provider: ${config.provider}`);
