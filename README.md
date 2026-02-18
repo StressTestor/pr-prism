@@ -13,6 +13,7 @@ built this because i saw someone was staring at 3000+ open PRs on a repo and los
 - **review** — LLM review of a single PR, gives you a merge/revise/close recommendation
 - **triage** — runs everything in one shot
 - **report** — dumps a markdown report with all the findings
+- **re-embed** — re-embeds all items with your current provider without re-scanning github
 - **reset** — wipe the database and start fresh
 
 ## setup
@@ -70,6 +71,7 @@ check `.env.example` for the env var names.
 all in `prism.config.yaml`. defaults are sane, you really only need to set `repo`:
 
 ```yaml
+version: 1
 repo: owner/repo
 vision_doc: ./VISION.md  # optional, falls back to repo README
 
@@ -77,7 +79,6 @@ thresholds:
   duplicate_similarity: 0.85
   aligned: 0.65
   drifting: 0.40
-  off_vision: 0.40
 
 scoring:
   weights:
@@ -145,7 +146,7 @@ single sqlite db under `data/`. embeddings stored as vectors via sqlite-vec. dif
 - embedding ~7000 items with ollama locally takes ~80 min on M1 Air (batch size auto-scales to 50 for local models)
 - after that its incremental, only embeds new/changed items
 - clustering is fast, bottleneck is always the embedding step on first run
-- if you switch embedding providers, run `npx prism reset` first (different providers = different dimensions)
+- if you switch embedding providers, run `npx prism re-embed` to re-embed with the new model, or `npx prism reset` to start fresh
 
 ## license
 

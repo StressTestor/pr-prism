@@ -16,7 +16,6 @@ export interface PRItem {
   additions?: number;
   deletions?: number;
   changedFiles?: number;
-  hasMergeConflicts?: boolean;
   hasTests?: boolean;
 }
 

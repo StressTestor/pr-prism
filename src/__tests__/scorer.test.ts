@@ -1,20 +1,20 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { PrismConfig } from "../config.js";
 import { scorePR } from "../scorer.js";
 import type { PRItem } from "../types.js";
-import type { PrismConfig } from "../config.js";
 
 function makeConfig(overrides = {}): PrismConfig {
   return {
     repo: "test/repo",
-    thresholds: { duplicate_similarity: 0.85, aligned: 0.65, drifting: 0.40 },
+    thresholds: { duplicate_similarity: 0.85, aligned: 0.65, drifting: 0.4 },
     scoring: {
       weights: {
         has_tests: 0.25,
-        ci_passing: 0.20,
+        ci_passing: 0.2,
         diff_size_penalty: 0.15,
         author_history: 0.15,
         description_quality: 0.15,
-        review_approvals: 0.10,
+        review_approvals: 0.1,
       },
     },
     labels: {

@@ -1,35 +1,35 @@
 #!/usr/bin/env node
-import { Command } from "commander";
+import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { createInterface } from "node:readline";
 import chalk from "chalk";
-import ora from "ora";
 import Table from "cli-table3";
-import { writeFileSync, existsSync, copyFileSync, unlinkSync } from "fs";
-import { resolve } from "path";
-import { createInterface } from "readline";
-import { loadConfig, loadEnvConfig, parseRepo } from "./config.js";
-import { GitHubClient } from "./github.js";
-import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
-import { VectorStore } from "./store.js";
+import { Command } from "commander";
+import ora from "ora";
 import { findDuplicateClusters } from "./cluster.js";
-import { rankPRs, buildScorerContext } from "./scorer.js";
-import { checkVisionAlignment } from "./vision.js";
+import { loadConfig, loadEnvConfig, parseRepo } from "./config.js";
+import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
+import { GitHubClient } from "./github.js";
+import { applyLabelActions, ensureLabelsExist, type LabelAction } from "./labels.js";
 import { reviewPR } from "./reviewer.js";
-import { ensureLabelsExist, applyLabelActions, type LabelAction } from "./labels.js";
+import { buildScorerContext, rankPRs } from "./scorer.js";
+import { VectorStore } from "./store.js";
 import type { PRItem, StoreItem } from "./types.js";
+import { checkVisionAlignment } from "./vision.js";
 
 const program = new Command();
 
 program
   .name("prism")
   .description("BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale")
-  .version("0.4.1");
+  .version("0.5.0");
 
 // ── helpers ─────────────────────────────────────────────────────
 export function parseDuration(s: string): string {
   const match = s.match(/^(\d+)(d|w|m)$/);
   if (!match) throw new Error(`Invalid duration: ${s}. Use format like 7d, 2w, 1m`);
   const [, num, unit] = match;
-  const days = unit === "d" ? parseInt(num) : unit === "w" ? parseInt(num) * 7 : parseInt(num) * 30;
+  const days = unit === "d" ? parseInt(num, 10) : unit === "w" ? parseInt(num, 10) * 7 : parseInt(num, 10) * 30;
   const date = new Date();
   date.setDate(date.getDate() - days);
   return date.toISOString();
@@ -58,7 +58,7 @@ async function createPipelineContext(repoOverride?: string): Promise<PipelineCon
     apiKey: env.EMBEDDING_API_KEY,
     model: env.EMBEDDING_MODEL,
   });
-  const store = new VectorStore(undefined, embedder.dimensions);
+  const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL);
   return { config, env, owner, repo, repoFull, github, store };
 }
 
@@ -67,7 +67,7 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
   const since = opts.since ? parseDuration(opts.since) : undefined;
   const states = (opts.state || "open").split(",") as Array<"open" | "closed">;
 
-  let allItems: PRItem[] = [];
+  const allItems: PRItem[] = [];
 
   if (opts.useRest) {
     // REST fallback — no deep scan signals
@@ -77,8 +77,13 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
     for (const state of states) {
       const spinner = ora(`Fetching ${state} PRs from ${repoFull} (REST)...`).start();
       const prs = await github.fetchPRs({
-        since, state, maxItems: config.max_prs, batchSize: config.batch_size,
-        onProgress: (fetched) => { spinner.text = `Fetching ${state} PRs... ${fetched} so far`; },
+        since,
+        state,
+        maxItems: config.max_prs,
+        batchSize: config.batch_size,
+        onProgress: (fetched) => {
+          spinner.text = `Fetching ${state} PRs... ${fetched} so far`;
+        },
       });
       spinner.succeed(`Fetched ${prs.length} ${state} PRs`);
 
@@ -93,15 +98,23 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
     for (const state of states) {
       const spinner = ora(`Fetching ${state} PRs from ${repoFull} (GraphQL)...`).start();
       const prs = await github.fetchPRsGraphQL({
-        since, state, maxItems: config.max_prs,
-        onProgress: (fetched, total) => { spinner.text = `Fetching ${state} PRs... ${fetched}/${total}`; },
+        since,
+        state,
+        maxItems: config.max_prs,
+        onProgress: (fetched, total) => {
+          spinner.text = `Fetching ${state} PRs... ${fetched}/${total}`;
+        },
       });
       spinner.succeed(`Fetched ${prs.length} ${state} PRs (with CI, reviews, tests)`);
 
       const issueSpinner = ora(`Fetching ${state} issues...`).start();
       const issues = await github.fetchIssuesGraphQL({
-        since, state, maxItems: config.max_prs,
-        onProgress: (fetched, total) => { issueSpinner.text = `Fetching ${state} issues... ${fetched}/${total}`; },
+        since,
+        state,
+        maxItems: config.max_prs,
+        onProgress: (fetched, total) => {
+          issueSpinner.text = `Fetching ${state} issues... ${fetched}/${total}`;
+        },
       });
       issueSpinner.succeed(`Fetched ${issues.length} ${state} issues`);
 
@@ -134,13 +147,21 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
     apiKey: env.EMBEDDING_API_KEY,
     model: env.EMBEDDING_MODEL,
   });
+
+  // Store embedding metadata on first scan
+  if (!store.getMeta("embedding_model")) {
+    store.setMeta("embedding_model", env.EMBEDDING_MODEL);
+    store.setMeta("embedding_dimensions", String(embedder.dimensions));
+    store.setMeta("schema_version", "1");
+  }
+
   const embedSpinner = ora(`Embedding ${newItems.length} items...`).start();
   const BATCH_SIZE = env.EMBEDDING_PROVIDER === "ollama" ? 50 : 10;
   let embedded = 0;
 
   for (let i = 0; i < newItems.length; i += BATCH_SIZE) {
     const batch = newItems.slice(i, i + BATCH_SIZE);
-    const texts = batch.map(item => prepareEmbeddingText(item));
+    const texts = batch.map((item) => prepareEmbeddingText(item));
     const embedWithRetry = async (input: string[]): Promise<number[][]> => {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -150,10 +171,10 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
           if (msg.includes("429")) {
             const wait = 60 * (attempt + 1);
             embedSpinner.text = `Rate limited, waiting ${wait}s... (${embedded}/${newItems.length})`;
-            await new Promise(r => setTimeout(r, wait * 1000));
+            await new Promise((r) => setTimeout(r, wait * 1000));
           } else if (attempt < 2) {
             embedSpinner.text = `Error (${msg.slice(0, 60)}), retry ${attempt + 1}/3... (${embedded}/${newItems.length})`;
-            await new Promise(r => setTimeout(r, 5000));
+            await new Promise((r) => setTimeout(r, 5000));
           } else {
             throw e;
           }
@@ -215,10 +236,19 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
   console.log(chalk.bold(`\nDatabase: ${stats.prs} PRs, ${stats.issues} issues, ${stats.diffs} cached diffs`));
 }
 
-export async function runDupes(ctx: PipelineContext, opts: { threshold?: number; applyLabels?: boolean; dryRun?: boolean }) {
+export async function runDupes(
+  ctx: PipelineContext,
+  opts: { threshold?: number; applyLabels?: boolean; dryRun?: boolean },
+) {
   const { config, env, owner, repo, repoFull, store } = ctx;
   const threshold = opts.threshold ?? config.thresholds.duplicate_similarity;
   const items = store.getAllItems(repoFull) as unknown as PRItem[];
+
+  if (items.length === 0) {
+    console.log(chalk.red("no data found. run `prism scan` first."));
+    return [];
+  }
+
   const spinner = ora("Clustering duplicates...").start();
 
   const clusters = findDuplicateClusters(store, items, { threshold, repo: repoFull });
@@ -240,7 +270,9 @@ export async function runDupes(ctx: PipelineContext, opts: { threshold?: number;
   }
 
   console.log(table.toString());
-  console.log(chalk.dim(`\nTotal: ${clusters.reduce((s, c) => s + c.items.length, 0)} items across ${clusters.length} clusters`));
+  console.log(
+    chalk.dim(`\nTotal: ${clusters.reduce((s, c) => s + c.items.length, 0)} items across ${clusters.length} clusters`),
+  );
 
   if (opts.applyLabels || opts.dryRun) {
     const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
@@ -276,6 +308,11 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number }) {
   const { config, repoFull, github, store } = ctx;
   const items = store.getAllItems(repoFull) as unknown as PRItem[];
 
+  if (items.length === 0) {
+    console.log(chalk.red("no data found. run `prism scan` first."));
+    return [];
+  }
+
   const spinner = ora("Building scorer context...").start();
   const context = await buildScorerContext(items, github);
   spinner.succeed("Scorer context ready");
@@ -289,13 +326,7 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number }) {
   });
 
   top.forEach((pr, i) => {
-    table.push([
-      i + 1,
-      pr.number,
-      pr.score.toFixed(2),
-      (pr.author || "unknown").slice(0, 14),
-      pr.title.slice(0, 48),
-    ]);
+    table.push([i + 1, pr.number, pr.score.toFixed(2), (pr.author || "unknown").slice(0, 14), pr.title.slice(0, 48)]);
   });
 
   console.log(table.toString());
@@ -334,9 +365,9 @@ export async function runVision(ctx: PipelineContext, opts: { doc?: string; appl
   const scores = await checkVisionAlignment(store, embedder, config, docPath, repoFull);
   spinner.succeed("Vision alignment checked");
 
-  const aligned = scores.filter(s => s.classification === "aligned");
-  const drifting = scores.filter(s => s.classification === "drifting");
-  const offVision = scores.filter(s => s.classification === "off-vision");
+  const aligned = scores.filter((s) => s.classification === "aligned");
+  const drifting = scores.filter((s) => s.classification === "drifting");
+  const offVision = scores.filter((s) => s.classification === "off-vision");
 
   console.log(chalk.green(`  Aligned: ${aligned.length}`));
   console.log(chalk.yellow(`  Drifting: ${drifting.length}`));
@@ -355,7 +386,7 @@ export async function runVision(ctx: PipelineContext, opts: { doc?: string; appl
     const labelGithub = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
     if (opts.applyLabels) await ensureLabelsExist(labelGithub, config);
 
-    const actions: LabelAction[] = scores.map(s => ({
+    const actions: LabelAction[] = scores.map((s) => ({
       number: s.prNumber,
       action: "add" as const,
       label: config.labels[s.classification === "off-vision" ? "off_vision" : s.classification],
@@ -379,21 +410,63 @@ program
 
     if (!existsSync(".env") && existsSync(envExample)) {
       copyFileSync(envExample, ".env");
-      console.log(chalk.green("✓") + " Created .env (edit with your API keys)");
+      console.log(`${chalk.green("✓")} Created .env (edit with your API keys)`);
     } else if (existsSync(".env")) {
-      console.log(chalk.yellow("⊘") + " .env already exists");
+      console.log(`${chalk.yellow("⊘")} .env already exists`);
     }
 
     if (!existsSync("prism.config.yaml") && existsSync(configExample)) {
       copyFileSync(configExample, "prism.config.yaml");
-      console.log(chalk.green("✓") + " Created prism.config.yaml (edit repo and settings)");
+      console.log(`${chalk.green("✓")} Created prism.config.yaml (edit repo and settings)`);
     } else if (existsSync("prism.config.yaml")) {
-      console.log(chalk.yellow("⊘") + " prism.config.yaml already exists");
+      console.log(`${chalk.yellow("⊘")} prism.config.yaml already exists`);
     }
 
-    console.log("\n" + chalk.bold("Next steps:"));
-    console.log("  1. Edit .env with your GitHub token and AI provider keys");
-    console.log("  2. Edit prism.config.yaml with your repo and preferences");
+    // detect available providers
+    let ollamaReady = false;
+    let ollamaRunning = false;
+
+    try {
+      const resp = await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(2000) });
+      if (resp.ok) {
+        ollamaRunning = true;
+        const data = (await resp.json()) as any;
+        const models: string[] = (data.models || []).map((m: any) => m.name as string);
+        ollamaReady = models.some((m) => m.startsWith("qwen3-embedding"));
+      }
+    } catch {
+      /* ollama not running */
+    }
+
+    console.log(`\n${chalk.bold("provider detection:")}`);
+
+    if (ollamaReady) {
+      console.log(chalk.green("  detected: ollama with qwen3-embedding"));
+      // patch .env with ollama config
+      const envPath = resolve(process.cwd(), ".env");
+      if (existsSync(envPath)) {
+        let content = readFileSync(envPath, "utf-8");
+        content = content.replace(/^EMBEDDING_PROVIDER=.*/m, "EMBEDDING_PROVIDER=ollama");
+        content = content.replace(/^EMBEDDING_MODEL=.*/m, "EMBEDDING_MODEL=qwen3-embedding:0.6b");
+        writeFileSync(envPath, content);
+        console.log(chalk.dim("  pre-filled .env with ollama config"));
+      }
+    } else if (ollamaRunning) {
+      console.log(chalk.yellow("  ollama running but no embedding model found. run:"));
+      console.log(chalk.bold("    ollama pull qwen3-embedding:0.6b"));
+    } else if (process.env.JINA_API_KEY) {
+      console.log(chalk.green("  detected: JINA_API_KEY in environment"));
+    } else if (process.env.OPENAI_API_KEY) {
+      console.log(chalk.green("  detected: OPENAI_API_KEY in environment"));
+    } else {
+      console.log(chalk.yellow("  no embedding provider detected"));
+      console.log(chalk.dim("  install ollama and run: ollama pull qwen3-embedding:0.6b"));
+      console.log(chalk.dim("  or set EMBEDDING_PROVIDER and EMBEDDING_API_KEY in .env"));
+    }
+
+    console.log(`\n${chalk.bold("next steps:")}`);
+    console.log("  1. Edit .env with your GitHub token");
+    console.log("  2. Edit prism.config.yaml with your repo");
     console.log("  3. Run: prism scan");
   });
 
@@ -421,7 +494,6 @@ program
   .option("-t, --threshold <number>", "Similarity threshold", "0.85")
   .option("-r, --repo <owner/repo>", "Repository")
   .option("--cluster <id>", "Show specific cluster details")
-  .option("--diff", "Show diff comparison within cluster")
   .option("--apply-labels", "Apply labels to GitHub")
   .option("--dry-run", "Show what would be labeled without applying")
   .action(async (opts) => {
@@ -430,9 +502,10 @@ program
       if (opts.cluster) {
         // Show specific cluster detail
         const items = ctx.store.getAllItems(ctx.repoFull) as unknown as PRItem[];
-        const threshold = parseFloat(opts.threshold) || ctx.config.thresholds.duplicate_similarity;
+        const threshold =
+          opts.threshold !== undefined ? parseFloat(opts.threshold) : ctx.config.thresholds.duplicate_similarity;
         const clusters = findDuplicateClusters(ctx.store, items, { threshold, repo: ctx.repoFull });
-        const cluster = clusters.find(c => c.id === parseInt(opts.cluster));
+        const cluster = clusters.find((c) => c.id === parseInt(opts.cluster, 10));
         if (!cluster) {
           console.log(chalk.red(`Cluster #${opts.cluster} not found`));
           return;
@@ -443,11 +516,13 @@ program
           const isBest = item.number === cluster.bestPick.number;
           const prefix = isBest ? chalk.green("★") : " ";
           console.log(`${prefix} #${item.number} ${item.title}`);
-          console.log(`  Author: ${item.author} | Updated: ${item.updatedAt.slice(0, 10)} | Score: ${item.score.toFixed(2)}`);
+          console.log(
+            `  Author: ${item.author} | Updated: ${item.updatedAt.slice(0, 10)} | Score: ${item.score.toFixed(2)}`,
+          );
         }
       } else {
         await runDupes(ctx, {
-          threshold: parseFloat(opts.threshold) || undefined,
+          threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
           applyLabels: opts.applyLabels,
           dryRun: opts.dryRun,
         });
@@ -466,7 +541,7 @@ program
   .action(async (opts) => {
     const ctx = await createPipelineContext(opts.repo);
     try {
-      await runRank(ctx, { top: parseInt(opts.top) || 20 });
+      await runRank(ctx, { top: parseInt(opts.top, 10) || 20 });
     } finally {
       ctx.store.close();
     }
@@ -507,7 +582,7 @@ program
       apiKey: env.EMBEDDING_API_KEY,
       model: env.EMBEDDING_MODEL,
     });
-    const store = new VectorStore(undefined, embedder.dimensions);
+    const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL);
 
     const spinner = ora(`Fetching PR #${num}...`).start();
     let pr: PRItem;
@@ -542,9 +617,8 @@ program
       }
     }
 
-    const recColor = result.recommendation === "merge" ? chalk.green
-      : result.recommendation === "revise" ? chalk.yellow
-      : chalk.red;
+    const recColor =
+      result.recommendation === "merge" ? chalk.green : result.recommendation === "revise" ? chalk.yellow : chalk.red;
     console.log(chalk.bold("\n  Recommendation:"), recColor(result.recommendation.toUpperCase()));
     console.log(chalk.bold("  Confidence:"), `${(result.confidence * 100).toFixed(0)}%`);
 
@@ -590,13 +664,13 @@ program
   .action(async (opts) => {
     const dbPath = resolve(process.cwd(), "data", "prism.db");
     if (!existsSync(dbPath)) {
-      console.log(chalk.yellow("No database found at " + dbPath));
+      console.log(chalk.yellow(`No database found at ${dbPath}`));
       return;
     }
 
     if (!opts.yes) {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>(resolve => {
+      const answer = await new Promise<string>((resolve) => {
         rl.question(chalk.yellow("Delete database and all cached data? (y/N) "), resolve);
       });
       rl.close();
@@ -611,7 +685,70 @@ program
     for (const suffix of ["-wal", "-shm"]) {
       if (existsSync(dbPath + suffix)) unlinkSync(dbPath + suffix);
     }
-    console.log(chalk.green("✓") + " Database deleted. Run `prism scan` to rebuild.");
+    console.log(`${chalk.green("✓")} Database deleted. Run \`prism scan\` to rebuild.`);
+  });
+
+// ── re-embed ─────────────────────────────────────────────────────
+program
+  .command("re-embed")
+  .description("Re-embed all stored items with current embedding provider (no GitHub fetch)")
+  .option("-r, --repo <owner/repo>", "Repository")
+  .action(async (opts) => {
+    const config = loadConfig();
+    const env = loadEnvConfig();
+    const { owner, repo } = parseRepo(opts.repo || config.repo);
+    const repoFull = `${owner}/${repo}`;
+
+    const embedder = await createEmbeddingProvider({
+      provider: env.EMBEDDING_PROVIDER,
+      apiKey: env.EMBEDDING_API_KEY,
+      model: env.EMBEDDING_MODEL,
+    });
+
+    // open store without model check — we're intentionally changing models
+    const store = new VectorStore(undefined, embedder.dimensions);
+    const items = store.getAllItems(repoFull);
+
+    if (items.length === 0) {
+      console.log(chalk.red("no data found. run `prism scan` first."));
+      store.close();
+      return;
+    }
+
+    console.log(chalk.bold(`re-embedding ${items.length} items with ${env.EMBEDDING_MODEL}...`));
+
+    // drop and recreate vec_items with new dimensions
+    store.dropVecItems();
+    store.initVecItems();
+
+    const BATCH_SIZE = env.EMBEDDING_PROVIDER === "ollama" ? 50 : 10;
+    const spinner = ora("Re-embedding...").start();
+    let done = 0;
+
+    for (let i = 0; i < items.length; i += BATCH_SIZE) {
+      const batch = items.slice(i, i + BATCH_SIZE);
+      const texts = batch.map((item) =>
+        prepareEmbeddingText({
+          title: item.title,
+          body: item.bodySnippet,
+          type: item.type,
+        }),
+      );
+      const embeddings = await embedder.embedBatch(texts);
+      for (let j = 0; j < batch.length; j++) {
+        store.upsertEmbeddingOnly(batch[j].id, new Float32Array(embeddings[j]));
+      }
+      done += batch.length;
+      spinner.text = `Re-embedding... ${done}/${items.length}`;
+    }
+
+    // update meta
+    store.setMeta("embedding_model", env.EMBEDDING_MODEL);
+    store.setMeta("embedding_dimensions", String(embedder.dimensions));
+    store.setMeta("schema_version", "1");
+
+    spinner.succeed(`re-embedded ${items.length} items with ${env.EMBEDDING_MODEL}`);
+    store.close();
   });
 
 // ── status ──────────────────────────────────────────────────────
@@ -625,12 +762,7 @@ program
     const { owner, repo } = parseRepo(opts.repo || config.repo);
     const repoFull = `${owner}/${repo}`;
 
-    const embedder = await createEmbeddingProvider({
-      provider: env.EMBEDDING_PROVIDER,
-      apiKey: env.EMBEDDING_API_KEY,
-      model: env.EMBEDDING_MODEL,
-    });
-    const store = new VectorStore(undefined, embedder.dimensions);
+    const store = new VectorStore();
     const stats = store.getStats(repoFull);
 
     console.log(chalk.bold("pr-prism status\n"));
@@ -675,12 +807,12 @@ program
       apiKey: env.EMBEDDING_API_KEY,
       model: env.EMBEDDING_MODEL,
     });
-    const store = new VectorStore(undefined, embedder.dimensions);
+    const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL);
     const stats = store.getStats(repoFull);
     const items = store.getAllItems(repoFull) as unknown as PRItem[];
 
     if (items.length === 0) {
-      console.log(chalk.red("No data found. Run `prism scan` first."));
+      console.log(chalk.red("no data found. run `prism scan` first."));
       store.close();
       return;
     }
@@ -717,14 +849,14 @@ program
       spinner.text = "Checking vision alignment...";
       const scores = await checkVisionAlignment(store, embedder, config, visionDocPath, repoFull);
       visionResults = {
-        aligned: scores.filter(s => s.classification === "aligned").length,
-        drifting: scores.filter(s => s.classification === "drifting").length,
-        offVision: scores.filter(s => s.classification === "off-vision").length,
+        aligned: scores.filter((s) => s.classification === "aligned").length,
+        drifting: scores.filter((s) => s.classification === "drifting").length,
+        offVision: scores.filter((s) => s.classification === "off-vision").length,
       };
     }
 
-    const topN = parseInt(opts.top) || 20;
-    const clusterN = parseInt(opts.clusters) || 25;
+    const topN = parseInt(opts.top, 10) || 20;
+    const clusterN = parseInt(opts.clusters, 10) || 25;
     const now = new Date().toISOString().slice(0, 10);
 
     let report = `# pr-prism triage report\n\n`;
@@ -737,7 +869,7 @@ program
     report += `| open PRs scanned | ${stats.prs} |\n`;
     report += `| open issues scanned | ${stats.issues} |\n`;
     report += `| duplicate clusters | ${clusters.length} |\n`;
-    report += `| items in duplicate clusters | ${dupeItemCount} (${(dupeItemCount / stats.totalItems * 100).toFixed(0)}% of total) |\n`;
+    report += `| items in duplicate clusters | ${dupeItemCount} (${((dupeItemCount / stats.totalItems) * 100).toFixed(0)}% of total) |\n`;
     if (visionResults) {
       report += `| vision-aligned | ${visionResults.aligned} |\n`;
       report += `| vision-drifting | ${visionResults.drifting} |\n`;
@@ -755,7 +887,7 @@ program
     }
     report += `\n`;
 
-    const bigClusters = clusters.filter(c => c.items.length >= 10).slice(0, 10);
+    const bigClusters = clusters.filter((c) => c.items.length >= 10).slice(0, 10);
     if (bigClusters.length > 0) {
       report += `## largest duplicate groups\n\n`;
       for (const cluster of bigClusters) {

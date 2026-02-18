@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ReviewResult, LLMProvider } from "./types.js";
+import type { LLMProvider, ReviewResult } from "./types.js";
 
 const ReviewResultSchema = z.object({
   summary: z.string(),
@@ -40,7 +40,7 @@ class OpenAILLM implements LLMProvider {
       body: JSON.stringify({ model: this.model, messages, temperature: 0.3 }),
     });
     if (!resp.ok) throw new Error(`LLM API error (${resp.status}): ${await resp.text()}`);
-    const data = await resp.json() as any;
+    const data = (await resp.json()) as any;
     return data.choices[0].message.content;
   }
 
@@ -63,7 +63,7 @@ class OpenAILLM implements LLMProvider {
       }),
     });
     if (!resp.ok) throw new Error(`LLM API error (${resp.status}): ${await resp.text()}`);
-    const data = await resp.json() as any;
+    const data = (await resp.json()) as any;
     return JSON.parse(data.choices[0].message.content);
   }
 }
@@ -113,7 +113,7 @@ class AnthropicLLM implements LLMProvider {
       body: JSON.stringify(body),
     });
     if (!resp.ok) throw new Error(`Anthropic error (${resp.status}): ${await resp.text()}`);
-    const data = await resp.json() as any;
+    const data = (await resp.json()) as any;
     return data.content[0].text;
   }
 
@@ -141,18 +141,11 @@ Be concise, specific, and objective. Focus on:
 - Security implications
 - Whether it duplicates existing functionality`;
 
-export async function reviewPR(
-  title: string,
-  body: string,
-  diff: string,
-  llmConfig: LLMConfig
-): Promise<ReviewResult> {
+export async function reviewPR(title: string, body: string, diff: string, llmConfig: LLMConfig): Promise<ReviewResult> {
   const llm = createLLMProvider(llmConfig);
 
   // Cap diff to avoid token limits
-  const truncatedDiff = diff.length > 50_000
-    ? diff.slice(0, 50_000) + "\n\n[DIFF TRUNCATED]"
-    : diff;
+  const truncatedDiff = diff.length > 50_000 ? `${diff.slice(0, 50_000)}\n\n[DIFF TRUNCATED]` : diff;
 
   const prompt = `## PR: ${title}
 

@@ -1,8 +1,10 @@
 import type { VectorStore } from "./store.js";
-import type { Cluster, ScoredPR, PRItem, ScoreSignals } from "./types.js";
+import type { Cluster, PRItem, ScoredPR, ScoreSignals } from "./types.js";
 
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  let dot = 0, normA = 0, normB = 0;
+  let dot = 0,
+    normA = 0,
+    normB = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     normA += a[i] * a[i];
@@ -15,7 +17,7 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
 function recencyFactor(updatedAt: string): number {
   const ageMs = Date.now() - new Date(updatedAt).getTime();
   const ageDays = ageMs / (1000 * 60 * 60 * 24);
-  return Math.pow(0.5, ageDays / 30);
+  return 0.5 ** (ageDays / 30);
 }
 
 export interface ClusterOptions {
@@ -23,11 +25,7 @@ export interface ClusterOptions {
   repo: string;
 }
 
-export function findDuplicateClusters(
-  store: VectorStore,
-  items: PRItem[],
-  opts: ClusterOptions
-): Cluster[] {
+export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts: ClusterOptions): Cluster[] {
   const embeddings = store.getAllEmbeddings(opts.repo);
   const itemMap = new Map<string, PRItem>();
   for (const item of items) {
@@ -45,8 +43,8 @@ export function findDuplicateClusters(
       if (sim >= opts.threshold) {
         if (!adjacency.has(ids[i])) adjacency.set(ids[i], new Set());
         if (!adjacency.has(ids[j])) adjacency.set(ids[j], new Set());
-        adjacency.get(ids[i])!.add(ids[j]);
-        adjacency.get(ids[j])!.add(ids[i]);
+        adjacency.get(ids[i])?.add(ids[j]);
+        adjacency.get(ids[j])?.add(ids[i]);
       }
     }
   }
@@ -72,7 +70,7 @@ export function findDuplicateClusters(
     if (component.length < 2) continue;
 
     const clusterItems: ScoredPR[] = component
-      .map(cid => {
+      .map((cid) => {
         const item = itemMap.get(cid);
         if (!item) return null;
         const recency = recencyFactor(item.updatedAt);
@@ -92,7 +90,8 @@ export function findDuplicateClusters(
 
     if (clusterItems.length < 2) continue;
 
-    let totalSim = 0, pairs = 0;
+    let totalSim = 0,
+      pairs = 0;
     for (let i = 0; i < component.length; i++) {
       for (let j = i + 1; j < component.length; j++) {
         const embA = embeddings.get(component[i])!;
@@ -113,7 +112,9 @@ export function findDuplicateClusters(
 
   // Sort by size descending, then assign sequential IDs
   clusters.sort((a, b) => b.items.length - a.items.length);
-  clusters.forEach((c, i) => { c.id = i + 1; });
+  clusters.forEach((c, i) => {
+    c.id = i + 1;
+  });
 
   return clusters;
 }

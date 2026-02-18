@@ -27,7 +27,7 @@ class OpenAIEmbeddings implements EmbeddingProvider {
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    const sanitized = texts.map(t => {
+    const sanitized = texts.map((t) => {
       if (!t || typeof t !== "string") return " ";
       return t.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim() || " ";
     });
@@ -43,7 +43,7 @@ class OpenAIEmbeddings implements EmbeddingProvider {
       const err = await resp.text();
       throw new Error(`Embedding API error (${resp.status}): ${err}`);
     }
-    const data = await resp.json() as any;
+    const data = (await resp.json()) as any;
     return data.data.map((d: any) => d.embedding);
   }
 }
@@ -59,8 +59,12 @@ class KimiEmbeddings implements EmbeddingProvider {
     });
   }
 
-  embed(text: string) { return this.inner.embed(text); }
-  embedBatch(texts: string[]) { return this.inner.embedBatch(texts); }
+  embed(text: string) {
+    return this.inner.embed(text);
+  }
+  embedBatch(texts: string[]) {
+    return this.inner.embedBatch(texts);
+  }
 }
 
 class OllamaEmbeddings implements EmbeddingProvider {
@@ -101,7 +105,7 @@ class OllamaEmbeddings implements EmbeddingProvider {
       throw err;
     }
     if (!resp.ok) throw new Error(`Ollama error (${resp.status}): ${await resp.text()}`);
-    const data = await resp.json() as any;
+    const data = (await resp.json()) as any;
     if (!this.initialized) {
       this.dimensions = data.embeddings[0].length;
       this.initialized = true;
@@ -136,7 +140,7 @@ class VoyageEmbeddings implements EmbeddingProvider {
       body: JSON.stringify({ input: texts, model: this.model }),
     });
     if (!resp.ok) throw new Error(`VoyageAI error (${resp.status})`);
-    const data = await resp.json() as any;
+    const data = (await resp.json()) as any;
     this.dimensions = data.data[0].embedding.length;
     return data.data.map((d: any) => d.embedding);
   }
@@ -154,22 +158,31 @@ class JinaEmbeddings implements EmbeddingProvider {
     });
   }
 
-  embed(text: string) { return this.inner.embed(text); }
-  embedBatch(texts: string[]) { return this.inner.embedBatch(texts); }
+  embed(text: string) {
+    return this.inner.embed(text);
+  }
+  embedBatch(texts: string[]) {
+    return this.inner.embedBatch(texts);
+  }
 }
 
 export async function createEmbeddingProvider(config: ProviderConfig): Promise<EmbeddingProvider> {
   switch (config.provider) {
-    case "openai": return new OpenAIEmbeddings(config);
-    case "kimi": return new KimiEmbeddings(config);
+    case "openai":
+      return new OpenAIEmbeddings(config);
+    case "kimi":
+      return new KimiEmbeddings(config);
     case "ollama": {
       const provider = new OllamaEmbeddings(config);
       await provider.init();
       return provider;
     }
-    case "voyageai": return new VoyageEmbeddings(config);
-    case "jina": return new JinaEmbeddings(config);
-    default: throw new Error(`Unknown embedding provider: ${config.provider}`);
+    case "voyageai":
+      return new VoyageEmbeddings(config);
+    case "jina":
+      return new JinaEmbeddings(config);
+    default:
+      throw new Error(`Unknown embedding provider: ${config.provider}`);
   }
 }
 
