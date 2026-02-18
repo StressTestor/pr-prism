@@ -143,7 +143,9 @@ splits your VISION.md (or README) by headings, embeds each section, compares PR 
 
 ```
 src/
-  cli.ts          — CLI + pipeline orchestration
+  cli.ts          — CLI commands (thin wrapper)
+  index.ts        — public API barrel export
+  similarity.ts   — shared cosine similarity + zero-vector detection
   config.ts       — yaml + env config, zod validation
   github.ts       — GraphQL + REST client, rate limiting
   embeddings.ts   — multi-provider embedding (ollama, jina, openai, voyageai, kimi)
@@ -154,6 +156,19 @@ src/
   reviewer.ts     — LLM PR review
   labels.ts       — github label management
   types.ts        — shared types
+```
+
+## programmatic usage
+
+pipeline functions are independently importable for use in scripts or CI:
+
+```ts
+import { createPipelineContext, runScan, runDupes, runRank } from "pr-prism";
+
+const ctx = await createPipelineContext();
+await runScan(ctx, { json: true });
+const clusters = await runDupes(ctx, { json: true });
+ctx.store.close();
 ```
 
 single sqlite db under `data/`. embeddings stored as vectors via sqlite-vec. diffs get cached.

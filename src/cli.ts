@@ -22,7 +22,7 @@ const program = new Command();
 program
   .name("prism")
   .description("BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale")
-  .version("0.6.0");
+  .version("0.7.0");
 
 // ── helpers ─────────────────────────────────────────────────────
 export function parseDuration(s: string): string {
@@ -1066,4 +1066,12 @@ program
     store.close();
   });
 
-program.parse();
+// Only parse when run directly as CLI — allows importing pipeline functions
+const isDirectRun =
+  process.argv[1]?.endsWith("cli.js") || process.argv[1]?.endsWith("cli.ts") || process.argv[1]?.includes("prism");
+
+if (isDirectRun) {
+  program.parse();
+}
+
+export { program, createPipelineContext, type PipelineContext };
