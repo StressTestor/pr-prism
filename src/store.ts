@@ -244,11 +244,12 @@ export class VectorStore {
   }
 
   getAllEmbeddings(repo: string): Map<string, Float32Array> {
-    const items = this.db.prepare("SELECT id FROM items WHERE repo = ?").all(repo) as any[];
+    const rows = this.db
+      .prepare("SELECT v.id, v.embedding FROM vec_items v INNER JOIN items i ON v.id = i.id WHERE i.repo = ?")
+      .all(repo) as any[];
     const map = new Map<string, Float32Array>();
-    for (const item of items) {
-      const emb = this.getEmbedding(item.id);
-      if (emb) map.set(item.id, emb);
+    for (const row of rows) {
+      map.set(row.id, new Float32Array(row.embedding.buffer));
     }
     return map;
   }

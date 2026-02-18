@@ -22,7 +22,7 @@ const program = new Command();
 program
   .name("prism")
   .description("BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale")
-  .version("0.7.0");
+  .version("0.8.0");
 
 // ── helpers ─────────────────────────────────────────────────────
 export function parseDuration(s: string): string {
@@ -59,8 +59,35 @@ async function createPipelineContext(repoOverride?: string): Promise<PipelineCon
     apiKey: env.EMBEDDING_API_KEY,
     model: env.EMBEDDING_MODEL,
   });
-  const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL);
-  return { config, env, owner, repo, repoFull, github, store, embedder };
+  // Matryoshka dimension truncation
+  const targetDims = env.EMBEDDING_DIMENSIONS;
+  if (targetDims && targetDims > embedder.dimensions) {
+    throw new Error(
+      `EMBEDDING_DIMENSIONS (${targetDims}) exceeds model's native dimensions (${embedder.dimensions}). ` +
+        `use a value <= ${embedder.dimensions} or remove EMBEDDING_DIMENSIONS.`,
+    );
+  }
+  const effectiveDims = targetDims || embedder.dimensions;
+
+  // Wrap embedder to truncate if needed
+  const wrappedEmbedder =
+    targetDims && targetDims < embedder.dimensions
+      ? {
+          dimensions: targetDims,
+          embed: async (text: string) => {
+            const full = await embedder.embed(text);
+            return full.slice(0, targetDims);
+          },
+          embedBatch: async (texts: string[]) => {
+            const full = await embedder.embedBatch(texts);
+            return full.map((v) => v.slice(0, targetDims));
+          },
+          init: () => Promise.resolve(),
+        }
+      : embedder;
+
+  const store = new VectorStore(undefined, effectiveDims, env.EMBEDDING_MODEL);
+  return { config, env, owner, repo, repoFull, github, store, embedder: wrappedEmbedder as typeof embedder };
 }
 
 export async function runScan(
@@ -152,11 +179,14 @@ export async function runScan(
   if (!store.getMeta("embedding_model")) {
     store.setMeta("embedding_model", env.EMBEDDING_MODEL);
     store.setMeta("embedding_dimensions", String(embedder.dimensions));
+    if (env.EMBEDDING_DIMENSIONS) {
+      store.setMeta("embedding_dimensions_native", String(env.EMBEDDING_DIMENSIONS));
+    }
     store.setMeta("schema_version", "1");
   }
 
   const embedSpinner = ora(`Embedding ${newItems.length} items...`).start();
-  const BATCH_SIZE = env.EMBEDDING_PROVIDER === "ollama" ? 50 : 10;
+  const BATCH_SIZE = config.batch_size || (env.EMBEDDING_PROVIDER === "ollama" ? 50 : 10);
   let embedded = 0;
   let zeroVectors = 0;
 
@@ -815,7 +845,7 @@ program
     store.dropVecItems();
     store.initVecItems();
 
-    const BATCH_SIZE = env.EMBEDDING_PROVIDER === "ollama" ? 50 : 10;
+    const BATCH_SIZE = config.batch_size || (env.EMBEDDING_PROVIDER === "ollama" ? 50 : 10);
     const spinner = ora("Re-embedding...").start();
     let done = 0;
 

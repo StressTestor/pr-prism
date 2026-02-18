@@ -173,12 +173,26 @@ ctx.store.close();
 
 single sqlite db under `data/`. embeddings stored as vectors via sqlite-vec. diffs get cached.
 
+## performance tuning
+
+**matryoshka truncation** — reduce embedding dimensions for faster clustering with minimal quality loss:
+
+```bash
+EMBEDDING_DIMENSIONS=512  # in .env — truncates 1024-dim vectors to 512
+```
+
+works with any model that supports matryoshka embeddings (qwen3, jina v3, openai v3). halves memory and speeds up similarity comparisons.
+
+**ANN pre-filtering** — for repos with 5000+ items, dupe clustering automatically switches from brute-force O(n²) to approximate nearest neighbor candidate generation using sqlite-vec, then verifies with exact cosine similarity. same quality, way faster.
+
+**batch size** — configurable via `batch_size` in prism.config.yaml (default 50). lower it if you're hitting OOM with large models.
+
 ## notes
 
 - first scan of ~3500 PRs via GraphQL takes ~3 min (mostly pagination + author history lookups)
 - embedding ~7000 items with ollama locally takes ~80 min on M1 Air (batch size auto-scales to 50 for local models)
 - after that its incremental, only embeds new/changed items
-- clustering is fast, bottleneck is always the embedding step on first run
+- clustering is fast for < 5000 items, ANN kicks in above that
 - if you switch embedding providers, run `npx prism re-embed` to re-embed with the new model, or `npx prism reset` to start fresh
 
 ## license
