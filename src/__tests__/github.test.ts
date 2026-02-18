@@ -1,17 +1,23 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 
 // Test the CI status mapping logic (extracted from github.ts for testability)
 function mapCIStatus(state: string | null | undefined): "success" | "failure" | "pending" | "unknown" {
   switch (state) {
-    case "SUCCESS": return "success";
-    case "FAILURE": case "ERROR": return "failure";
-    case "PENDING": case "EXPECTED": return "pending";
-    default: return "unknown";
+    case "SUCCESS":
+      return "success";
+    case "FAILURE":
+    case "ERROR":
+      return "failure";
+    case "PENDING":
+    case "EXPECTED":
+      return "pending";
+    default:
+      return "unknown";
   }
 }
 
 function hasTestFiles(filenames: string[]): boolean {
-  return filenames.some(f => /test|spec|__tests__/i.test(f));
+  return filenames.some((f) => /test|spec|__tests__/i.test(f));
 }
 
 describe("mapCIStatus", () => {
@@ -72,14 +78,17 @@ describe("GraphQL response → PRItem mapping", () => {
       changedFiles: 3,
       labels: { nodes: [{ name: "bug" }] },
       reviews: { totalCount: 2 },
-      files: { totalCount: 3, nodes: [{ path: "src/auth.ts" }, { path: "src/__tests__/auth.test.ts" }, { path: "README.md" }] },
+      files: {
+        totalCount: 3,
+        nodes: [{ path: "src/auth.ts" }, { path: "src/__tests__/auth.test.ts" }, { path: "README.md" }],
+      },
       commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] },
     };
 
     // Simulate the mapping from fetchPRsGraphQL
-    const fileNodes: string[] = node.files.nodes.map(f => f.path);
+    const fileNodes: string[] = node.files.nodes.map((f) => f.path);
     const foundTests = hasTestFiles(fileNodes);
-    const hasTests = foundTests ? true : (node.files.totalCount > 100 ? undefined : false);
+    const hasTests = foundTests ? true : node.files.totalCount > 100 ? undefined : false;
     const ciStatus = mapCIStatus(node.commits.nodes[0].commit.statusCheckRollup.state);
 
     expect(ciStatus).toBe("success");
@@ -94,7 +103,7 @@ describe("GraphQL response → PRItem mapping", () => {
     const fileTotalCount = 150;
     const foundTests = hasTestFiles(fileNodes);
     // 100+ files and no test found — default to undefined (neutral)
-    const hasTests = foundTests ? true : (fileTotalCount > 100 ? undefined : false);
+    const hasTests = foundTests ? true : fileTotalCount > 100 ? undefined : false;
     expect(hasTests).toBeUndefined();
   });
 
@@ -102,7 +111,7 @@ describe("GraphQL response → PRItem mapping", () => {
     const fileNodes = [...Array.from({ length: 99 }, (_, i) => `src/file${i}.ts`), "src/__tests__/foo.test.ts"];
     const fileTotalCount = 150;
     const foundTests = hasTestFiles(fileNodes);
-    const hasTests = foundTests ? true : (fileTotalCount > 100 ? undefined : false);
+    const hasTests = foundTests ? true : fileTotalCount > 100 ? undefined : false;
     expect(hasTests).toBe(true);
   });
 });

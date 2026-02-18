@@ -1,8 +1,7 @@
-import { readFileSync } from "fs";
-import type { EmbeddingProvider } from "./types.js";
-import type { VectorStore } from "./store.js";
-import type { VisionScore } from "./types.js";
+import { readFileSync } from "node:fs";
 import type { PrismConfig } from "./config.js";
+import type { VectorStore } from "./store.js";
+import type { EmbeddingProvider, VisionScore } from "./types.js";
 
 interface VisionChunk {
   heading: string;
@@ -33,11 +32,13 @@ function splitByHeadings(doc: string): Array<{ heading: string; text: string }> 
     sections.push({ heading: currentHeading, text: currentLines.join("\n").trim() });
   }
 
-  return sections.filter(s => s.text.length > 20);
+  return sections.filter((s) => s.text.length > 20);
 }
 
 function cosineSim(a: number[], b: number[]): number {
-  let dot = 0, normA = 0, normB = 0;
+  let dot = 0,
+    normA = 0,
+    normB = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     normA += a[i] * a[i];
@@ -47,17 +48,14 @@ function cosineSim(a: number[], b: number[]): number {
   return denom === 0 ? 0 : dot / denom;
 }
 
-export async function loadAndEmbedVisionDoc(
-  docPath: string,
-  embedder: EmbeddingProvider
-): Promise<VisionChunk[]> {
+export async function loadAndEmbedVisionDoc(docPath: string, embedder: EmbeddingProvider): Promise<VisionChunk[]> {
   const content = readFileSync(docPath, "utf-8");
 
   // If doc is short (<8K chars ≈ <4K tokens), embed whole doc + sections
   const sections = splitByHeadings(content);
 
   // Truncate sections to ~6K chars (~3K tokens) to stay within embedding model limits
-  const textsToEmbed = sections.map(s => {
+  const textsToEmbed = sections.map((s) => {
     const text = s.text.slice(0, 6000);
     return `${s.heading}\n\n${text}`;
   });
@@ -86,7 +84,7 @@ export async function loadAndEmbedVisionDoc(
 export function scoreVisionAlignment(
   prEmbedding: number[],
   visionChunks: VisionChunk[],
-  config: PrismConfig
+  config: PrismConfig,
 ): VisionScore {
   let maxSim = 0;
   let matchedSection = "";
@@ -122,7 +120,7 @@ export async function checkVisionAlignment(
   embedder: EmbeddingProvider,
   config: PrismConfig,
   visionDocPath: string,
-  repo: string
+  repo: string,
 ): Promise<VisionScore[]> {
   const visionChunks = await loadAndEmbedVisionDoc(visionDocPath, embedder);
   const items = store.getAllItems(repo);

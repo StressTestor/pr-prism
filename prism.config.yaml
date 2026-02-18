@@ -1,3 +1,4 @@
+version: 1
 repo: owner/repo
 vision_doc: ./VISION.md
 
@@ -5,7 +6,6 @@ thresholds:
   duplicate_similarity: 0.85
   aligned: 0.65
   drifting: 0.40
-  off_vision: 0.40
 
 scoring:
   weights:

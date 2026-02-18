@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 
 // parseDuration is exported from cli.ts but importing it triggers program.parse()
 // so we inline the function here for unit testing
@@ -6,7 +6,7 @@ function parseDuration(s: string): string {
   const match = s.match(/^(\d+)(d|w|m)$/);
   if (!match) throw new Error(`Invalid duration: ${s}. Use format like 7d, 2w, 1m`);
   const [, num, unit] = match;
-  const days = unit === "d" ? parseInt(num) : unit === "w" ? parseInt(num) * 7 : parseInt(num) * 30;
+  const days = unit === "d" ? parseInt(num, 10) : unit === "w" ? parseInt(num, 10) * 7 : parseInt(num, 10) * 30;
   const date = new Date();
   date.setDate(date.getDate() - days);
   return date.toISOString();

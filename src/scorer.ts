@@ -1,6 +1,6 @@
-import type { PRItem, ScoredPR, ScoreSignals } from "./types.js";
 import type { PrismConfig } from "./config.js";
 import type { GitHubClient } from "./github.js";
+import type { PRItem, ScoredPR, ScoreSignals } from "./types.js";
 
 interface ScorerContext {
   authorMergeCounts: Map<string, number>;
@@ -10,9 +10,9 @@ function normalizeDescriptionQuality(body: string): number {
   if (!body) return 0;
   const len = body.length;
   if (len < 50) return 0.1;
-  if (len < 200) return 0.3 + (len - 50) / 150 * 0.3;
-  if (len < 1000) return 0.6 + (len - 200) / 800 * 0.3;
-  return 0.9 + Math.min(0.1, (len - 1000) / 5000 * 0.1);
+  if (len < 200) return 0.3 + ((len - 50) / 150) * 0.3;
+  if (len < 1000) return 0.6 + ((len - 200) / 800) * 0.3;
+  return 0.9 + Math.min(0.1, ((len - 1000) / 5000) * 0.1);
 }
 
 function normalizeDiffSize(additions: number, deletions: number): number {
@@ -32,10 +32,7 @@ function normalizeAuthorHistory(mergeCount: number): number {
   return Math.min(1.0, 0.7 + (mergeCount - 20) * 0.005);
 }
 
-export async function buildScorerContext(
-  items: PRItem[],
-  github: GitHubClient
-): Promise<ScorerContext> {
+export async function buildScorerContext(items: PRItem[], github: GitHubClient): Promise<ScorerContext> {
   const authorMergeCounts = new Map<string, number>();
 
   const authorFreq = new Map<string, number>();
@@ -54,17 +51,13 @@ export async function buildScorerContext(
     const count = await github.getAuthorMergeCountGraphQL(author);
     authorMergeCounts.set(author, count);
     // 300ms throttle — respects GitHub's ~30 req/min secondary rate limit on search
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 300));
   }
 
   return { authorMergeCounts };
 }
 
-export function scorePR(
-  item: PRItem,
-  config: PrismConfig,
-  context: ScorerContext
-): ScoredPR {
+export function scorePR(item: PRItem, config: PrismConfig, context: ScorerContext): ScoredPR {
   const weights = config.scoring.weights;
   const authorMerges = context.authorMergeCounts.get(item.author) || 0;
 
@@ -77,7 +70,7 @@ export function scorePR(
     authorHistory: normalizeAuthorHistory(authorMerges),
     descriptionQuality: normalizeDescriptionQuality(item.body),
     reviewApprovals: Math.min(1.0, (item.reviewCount || 0) / 3),
-    recency: Math.pow(0.5, (Date.now() - new Date(item.updatedAt).getTime()) / (1000 * 60 * 60 * 24 * 30)),
+    recency: 0.5 ** ((Date.now() - new Date(item.updatedAt).getTime()) / (1000 * 60 * 60 * 24 * 30)),
   };
 
   let effectiveWeights = { ...weights };
@@ -106,12 +99,6 @@ export function scorePR(
   return { ...item, score, signals };
 }
 
-export function rankPRs(
-  items: PRItem[],
-  config: PrismConfig,
-  context: ScorerContext
-): ScoredPR[] {
-  return items
-    .map(item => scorePR(item, config, context))
-    .sort((a, b) => b.score - a.score);
+export function rankPRs(items: PRItem[], config: PrismConfig, context: ScorerContext): ScoredPR[] {
+  return items.map((item) => scorePR(item, config, context)).sort((a, b) => b.score - a.score);
 }

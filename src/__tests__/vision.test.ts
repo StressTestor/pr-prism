@@ -1,12 +1,21 @@
-import { describe, it, expect } from "vitest";
-import { scoreVisionAlignment } from "../vision.js";
+import { describe, expect, it } from "vitest";
 import type { PrismConfig } from "../config.js";
+import { scoreVisionAlignment } from "../vision.js";
 
 function makeConfig(): PrismConfig {
   return {
     repo: "test/repo",
-    thresholds: { duplicate_similarity: 0.85, aligned: 0.65, drifting: 0.40 },
-    scoring: { weights: { has_tests: 0.25, ci_passing: 0.20, diff_size_penalty: 0.15, author_history: 0.15, description_quality: 0.15, review_approvals: 0.10 } },
+    thresholds: { duplicate_similarity: 0.85, aligned: 0.65, drifting: 0.4 },
+    scoring: {
+      weights: {
+        has_tests: 0.25,
+        ci_passing: 0.2,
+        diff_size_penalty: 0.15,
+        author_history: 0.15,
+        description_quality: 0.15,
+        review_approvals: 0.1,
+      },
+    },
     labels: { duplicate: "d", aligned: "a", drifting: "dr", off_vision: "ov", top_pick: "tp" },
     batch_size: 50,
     max_prs: 5000,
@@ -36,7 +45,7 @@ describe("scoreVisionAlignment", () => {
     // Construct vectors with ~0.5 cosine similarity
     const prEmb = [1, 1, 0];
     const chunks = [{ heading: "Goal 1", text: "test", embedding: [1, 0, 0] }];
-    const result = scoreVisionAlignment(prEmb, chunks, config);
+    const _result = scoreVisionAlignment(prEmb, chunks, config);
     // cos(45°) ≈ 0.707 which is > 0.65 → aligned
     // Use a different angle
     const prEmb2 = [1, 1.5, 0];

@@ -1,5 +1,5 @@
-import type { GitHubClient } from "./github.js";
 import type { PrismConfig } from "./config.js";
+import type { GitHubClient } from "./github.js";
 
 const LABEL_COLORS: Record<string, { color: string; description: string }> = {
   duplicate: { color: "d93f0b", description: "Duplicate or near-duplicate of another PR" },
@@ -9,10 +9,7 @@ const LABEL_COLORS: Record<string, { color: string; description: string }> = {
   top_pick: { color: "5319e7", description: "Best PR in its duplicate cluster" },
 };
 
-export async function ensureLabelsExist(
-  github: GitHubClient,
-  config: PrismConfig
-): Promise<void> {
+export async function ensureLabelsExist(github: GitHubClient, config: PrismConfig): Promise<void> {
   for (const [key, labelName] of Object.entries(config.labels)) {
     const meta = LABEL_COLORS[key];
     if (!meta) continue;
@@ -30,7 +27,7 @@ export interface LabelAction {
 export async function applyLabelActions(
   github: GitHubClient,
   actions: LabelAction[],
-  dryRun = false
+  dryRun = false,
 ): Promise<LabelAction[]> {
   if (dryRun) return actions;
 
@@ -41,7 +38,7 @@ export async function applyLabelActions(
       await github.removeLabel(action.number, action.label);
     }
     // Rate limit: 200ms between label API calls
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 200));
   }
 
   return actions;

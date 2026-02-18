@@ -1,6 +1,6 @@
 {
   "name": "pr-prism",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale",
   "type": "module",
   "bin": {
@@ -11,13 +11,18 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint": "biome check src/",
+    "format": "biome format src/ --write",
+    "prepare": "npm run build"
   },
   "engines": {
     "node": ">=21.2.0"
   },
   "files": [
-    "dist/"
+    "dist/",
+    ".env.example",
+    "prism.config.yaml"
   ],
   "keywords": [
     "github",
@@ -35,13 +40,13 @@
     "cli-table3": "^0.6.5",
     "commander": "^14.0.3",
     "dotenv": "^17.3.1",
-    "listr2": "^10.1.0",
     "ora": "^9.3.0",
     "sqlite-vec": "^0.1.7-alpha.2",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.2.3",
     "tsx": "^4.21.0",

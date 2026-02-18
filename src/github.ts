@@ -1,6 +1,6 @@
 import { Octokit } from "@octokit/rest";
-import type { PRItem, RateLimitInfo } from "./types.js";
 import type { VectorStore } from "./store.js";
+import type { PRItem, RateLimitInfo } from "./types.js";
 
 export interface FetchOptions {
   since?: string;
@@ -11,15 +11,21 @@ export interface FetchOptions {
 }
 
 function hasTestFiles(filenames: string[]): boolean {
-  return filenames.some(f => /test|spec|__tests__/i.test(f));
+  return filenames.some((f) => /test|spec|__tests__/i.test(f));
 }
 
 function mapCIStatus(state: string | null | undefined): PRItem["ciStatus"] {
   switch (state) {
-    case "SUCCESS": return "success";
-    case "FAILURE": case "ERROR": return "failure";
-    case "PENDING": case "EXPECTED": return "pending";
-    default: return "unknown";
+    case "SUCCESS":
+      return "success";
+    case "FAILURE":
+    case "ERROR":
+      return "failure";
+    case "PENDING":
+    case "EXPECTED":
+      return "pending";
+    default:
+      return "unknown";
   }
 }
 
@@ -68,12 +74,12 @@ export class GitHubClient {
         if (err.status === 403 && this.rateLimit.remaining === 0) {
           const waitMs = Math.max(0, this.rateLimit.resetAt.getTime() - Date.now()) + 1000;
           console.warn(`Rate limited. Waiting ${Math.ceil(waitMs / 1000)}s until reset...`);
-          await new Promise(r => setTimeout(r, waitMs));
+          await new Promise((r) => setTimeout(r, waitMs));
           continue;
         }
         if (err.status === 403 && attempt < 2) {
           const delay = (attempt + 1) * 5000;
-          await new Promise(r => setTimeout(r, delay));
+          await new Promise((r) => setTimeout(r, delay));
           continue;
         }
         throw err;
@@ -89,16 +95,16 @@ export class GitHubClient {
     const items: PRItem[] = [];
 
     // Map REST state values to GraphQL enum values
-    const gqlStates = state === "all"
-      ? ["OPEN", "CLOSED", "MERGED"]
-      : state === "closed" ? ["CLOSED", "MERGED"] : ["OPEN"];
+    const gqlStates =
+      state === "all" ? ["OPEN", "CLOSED", "MERGED"] : state === "closed" ? ["CLOSED", "MERGED"] : ["OPEN"];
 
     let cursor: string | null = null;
     let totalCount = 0;
 
     while (items.length < maxItems) {
       const result: any = await this.withBackoff(() =>
-        this.octokit.graphql(`
+        this.octokit.graphql(
+          `
           query($owner: String!, $repo: String!, $states: [PullRequestState!]!, $cursor: String) {
             repository(owner: $owner, name: $repo) {
               pullRequests(first: 100, after: $cursor, states: $states, orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -129,12 +135,14 @@ export class GitHubClient {
               }
             }
           }
-        `, {
-          owner: this.owner,
-          repo: this.repo,
-          states: gqlStates,
-          cursor,
-        })
+        `,
+          {
+            owner: this.owner,
+            repo: this.repo,
+            states: gqlStates,
+            cursor,
+          },
+        ),
       );
 
       this.updateGraphQLRateLimit((result as any).extensions);
@@ -154,7 +162,7 @@ export class GitHubClient {
         const fileTotalCount: number = pr.files?.totalCount || 0;
         const foundTests = hasTestFiles(fileNodes);
         // If 100+ files and no test found in first 100, we can't be sure — default to undefined (neutral 0.5)
-        const hasTests = foundTests ? true : (fileTotalCount > 100 ? undefined : false);
+        const hasTests = foundTests ? true : fileTotalCount > 100 ? undefined : false;
 
         const ciRollup = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state;
 
@@ -197,7 +205,8 @@ export class GitHubClient {
 
     while (items.length < maxItems) {
       const result: any = await this.withBackoff(() =>
-        this.octokit.graphql(`
+        this.octokit.graphql(
+          `
           query($owner: String!, $repo: String!, $states: [IssueState!]!, $cursor: String) {
             repository(owner: $owner, name: $repo) {
               issues(first: 100, after: $cursor, states: $states, orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -216,12 +225,14 @@ export class GitHubClient {
               }
             }
           }
-        `, {
-          owner: this.owner,
-          repo: this.repo,
-          states: gqlStates,
-          cursor,
-        })
+        `,
+          {
+            owner: this.owner,
+            repo: this.repo,
+            states: gqlStates,
+            cursor,
+          },
+        ),
       );
 
       this.updateGraphQLRateLimit((result as any).extensions);
@@ -263,13 +274,16 @@ export class GitHubClient {
   async getAuthorMergeCountGraphQL(author: string): Promise<number> {
     try {
       const result: any = await this.withBackoff(() =>
-        this.octokit.graphql(`
+        this.octokit.graphql(
+          `
           query($q: String!) {
             search(query: $q, type: ISSUE, first: 0) { issueCount }
           }
-        `, {
-          q: `repo:${this.owner}/${this.repo} type:pr author:${author} is:merged`,
-        })
+        `,
+          {
+            q: `repo:${this.owner}/${this.repo} type:pr author:${author} is:merged`,
+          },
+        ),
       );
       this.updateGraphQLRateLimit((result as any).extensions);
       return result.search.issueCount;
@@ -295,7 +309,7 @@ export class GitHubClient {
           direction: "desc",
           per_page: Math.min(batchSize, 100),
           page,
-        })
+        }),
       );
 
       this.updateRateLimit(response.headers as Record<string, string>);
@@ -318,7 +332,7 @@ export class GitHubClient {
           author: pr.user?.login || "unknown",
           createdAt: pr.created_at,
           updatedAt: pr.updated_at,
-          labels: pr.labels.map(l => (typeof l === "string" ? l : l.name || "")),
+          labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name || "")),
           diffUrl: pr.diff_url,
           additions: (pr as any).additions,
           deletions: (pr as any).deletions,
@@ -348,7 +362,7 @@ export class GitHubClient {
           direction: "desc",
           per_page: Math.min(batchSize, 100),
           page,
-        })
+        }),
       );
 
       this.updateRateLimit(response.headers as Record<string, string>);
@@ -373,7 +387,7 @@ export class GitHubClient {
           author: issue.user?.login || "unknown",
           createdAt: issue.created_at,
           updatedAt: issue.updated_at,
-          labels: issue.labels.map(l => (typeof l === "string" ? l : l.name || "")),
+          labels: issue.labels.map((l) => (typeof l === "string" ? l : l.name || "")),
         });
       }
 
@@ -390,7 +404,7 @@ export class GitHubClient {
         owner: this.owner,
         repo: this.repo,
         pull_number: prNumber,
-      })
+      }),
     );
     this.updateRateLimit(response.headers as Record<string, string>);
     const pr = response.data;
@@ -404,7 +418,7 @@ export class GitHubClient {
       author: pr.user?.login || "unknown",
       createdAt: pr.created_at,
       updatedAt: pr.updated_at,
-      labels: pr.labels.map(l => (typeof l === "string" ? l : l.name || "")),
+      labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name || "")),
       diffUrl: pr.diff_url,
       additions: pr.additions,
       deletions: pr.deletions,
@@ -419,7 +433,7 @@ export class GitHubClient {
           owner: this.owner,
           repo: this.repo,
           pull_number: prNumber,
-        })
+        }),
       );
       this.updateRateLimit(response.headers as Record<string, string>);
       return response.data.length;
@@ -435,10 +449,10 @@ export class GitHubClient {
           owner: this.owner,
           repo: this.repo,
           pull_number: prNumber,
-        })
+        }),
       );
       this.updateRateLimit(response.headers as Record<string, string>);
-      return response.data.map(f => f.filename);
+      return response.data.map((f) => f.filename);
     } catch {
       return [];
     }
@@ -458,7 +472,7 @@ export class GitHubClient {
         repo: this.repo,
         pull_number: prNumber,
         mediaType: { format: "diff" },
-      })
+      }),
     );
 
     this.updateRateLimit(response.headers as Record<string, string>);
@@ -467,7 +481,7 @@ export class GitHubClient {
 
     const MAX_DIFF = 500_000;
     if (diff.length > MAX_DIFF) {
-      diff = diff.slice(0, MAX_DIFF) + "\n\n[TRUNCATED — diff exceeded 500KB]";
+      diff = `${diff.slice(0, MAX_DIFF)}\n\n[TRUNCATED — diff exceeded 500KB]`;
     }
 
     if (store) {
@@ -484,7 +498,7 @@ export class GitHubClient {
           owner: this.owner,
           repo: this.repo,
           pull_number: prNumber,
-        })
+        }),
       );
 
       const { data: checks } = await this.withBackoff(() =>
@@ -492,15 +506,15 @@ export class GitHubClient {
           owner: this.owner,
           repo: this.repo,
           ref: pr.head.sha,
-        })
+        }),
       );
 
       if (checks.total_count === 0) return "unknown";
 
-      const allComplete = checks.check_runs.every(c => c.status === "completed");
+      const allComplete = checks.check_runs.every((c) => c.status === "completed");
       if (!allComplete) return "pending";
 
-      const allSuccess = checks.check_runs.every(c => c.conclusion === "success");
+      const allSuccess = checks.check_runs.every((c) => c.conclusion === "success");
       return allSuccess ? "success" : "failure";
     } catch {
       return "unknown";
@@ -514,7 +528,7 @@ export class GitHubClient {
         repo: this.repo,
         issue_number: number,
         labels: [label],
-      })
+      }),
     );
   }
 
@@ -526,7 +540,7 @@ export class GitHubClient {
           repo: this.repo,
           issue_number: number,
           name: label,
-        })
+        }),
       );
     } catch {
       // Label might not exist
@@ -556,7 +570,7 @@ export class GitHubClient {
       const response = await this.withBackoff(() =>
         this.octokit.search.issuesAndPullRequests({
           q: `repo:${this.owner}/${this.repo} type:pr author:${author} is:merged`,
-        })
+        }),
       );
       this.updateRateLimit(response.headers as Record<string, string>);
       return response.data.total_count;
@@ -572,7 +586,7 @@ export class GitHubClient {
           owner: this.owner,
           repo: this.repo,
           path,
-        })
+        }),
       );
       if ("content" in data && data.encoding === "base64") {
         return Buffer.from(data.content, "base64").toString("utf-8");
