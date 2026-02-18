@@ -22,7 +22,7 @@ const program = new Command();
 program
   .name("prism")
   .description("BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale")
-  .version("0.4.0");
+  .version("0.4.1");
 
 // ── helpers ─────────────────────────────────────────────────────
 export function parseDuration(s: string): string {
@@ -135,7 +135,7 @@ export async function runScan(ctx: PipelineContext, opts: { since?: string; stat
     model: env.EMBEDDING_MODEL,
   });
   const embedSpinner = ora(`Embedding ${newItems.length} items...`).start();
-  const BATCH_SIZE = 10;
+  const BATCH_SIZE = env.EMBEDDING_PROVIDER === "ollama" ? 50 : 10;
   let embedded = 0;
 
   for (let i = 0; i < newItems.length; i += BATCH_SIZE) {
