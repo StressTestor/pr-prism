@@ -2,7 +2,7 @@
 
 triage tool for repos drowning in PRs. finds dupes, ranks quality, checks if PRs actually align with where your project is headed.
 
-built this because i was staring at 3000+ open PRs on a repo and losing my mind trying to figure out which ones were duplicates of each other. turns out like 40% of them were.
+built this because i saw someone was staring at 3000+ open PRs on a repo and losing their mind trying to figure out which ones were duplicates of each other. turns out like 40% of them were.
 
 ## what it does
 
