@@ -51,9 +51,10 @@ export async function buildScorerContext(
     .map(([author]) => author);
 
   for (const author of topAuthors) {
-    const count = await github.getAuthorMergeCount(author);
+    const count = await github.getAuthorMergeCountGraphQL(author);
     authorMergeCounts.set(author, count);
-    await new Promise(r => setTimeout(r, 2100));
+    // 300ms throttle — respects GitHub's ~30 req/min secondary rate limit on search
+    await new Promise(r => setTimeout(r, 300));
   }
 
   return { authorMergeCounts };

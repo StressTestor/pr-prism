@@ -35,10 +35,6 @@ export function parseDuration(s: string): string {
   return date.toISOString();
 }
 
-function hasTestFiles(filenames: string[]): boolean {
-  return filenames.some(f => /test|spec|__tests__/i.test(f));
-}
-
 // ── pipeline functions (used by individual commands and triage) ──
 
 interface PipelineContext {
@@ -66,57 +62,55 @@ async function createPipelineContext(repoOverride?: string): Promise<PipelineCon
   return { config, env, owner, repo, repoFull, github, store };
 }
 
-export async function runScan(ctx: PipelineContext, opts: { since?: string; state?: string; skipDeepScan?: boolean }) {
+export async function runScan(ctx: PipelineContext, opts: { since?: string; state?: string; useRest?: boolean }) {
   const { config, env, repoFull, github, store } = ctx;
   const since = opts.since ? parseDuration(opts.since) : undefined;
   const states = (opts.state || "open").split(",") as Array<"open" | "closed">;
 
-  const rateLimitWarning = github.formatRateLimitWarning(config.max_prs);
-  if (rateLimitWarning) console.log(chalk.yellow(rateLimitWarning));
-
   let allItems: PRItem[] = [];
 
-  for (const state of states) {
-    const spinner = ora(`Fetching ${state} PRs from ${repoFull}...`).start();
-    const prs = await github.fetchPRs({
-      since, state, maxItems: config.max_prs, batchSize: config.batch_size,
-      onProgress: (fetched) => { spinner.text = `Fetching ${state} PRs... ${fetched} so far`; },
-    });
-    spinner.succeed(`Fetched ${prs.length} ${state} PRs`);
+  if (opts.useRest) {
+    // REST fallback — no deep scan signals
+    const rateLimitWarning = github.formatRateLimitWarning(config.max_prs);
+    if (rateLimitWarning) console.log(chalk.yellow(rateLimitWarning));
 
-    const issueSpinner = ora(`Fetching ${state} issues...`).start();
-    const issues = await github.fetchIssues({ since, state, maxItems: config.max_prs, batchSize: config.batch_size });
-    issueSpinner.succeed(`Fetched ${issues.length} ${state} issues`);
+    for (const state of states) {
+      const spinner = ora(`Fetching ${state} PRs from ${repoFull} (REST)...`).start();
+      const prs = await github.fetchPRs({
+        since, state, maxItems: config.max_prs, batchSize: config.batch_size,
+        onProgress: (fetched) => { spinner.text = `Fetching ${state} PRs... ${fetched} so far`; },
+      });
+      spinner.succeed(`Fetched ${prs.length} ${state} PRs`);
 
-    allItems.push(...prs, ...issues);
+      const issueSpinner = ora(`Fetching ${state} issues...`).start();
+      const issues = await github.fetchIssues({ since, state, maxItems: config.max_prs, batchSize: config.batch_size });
+      issueSpinner.succeed(`Fetched ${issues.length} ${state} issues`);
+
+      allItems.push(...prs, ...issues);
+    }
+  } else {
+    // GraphQL — gets CI, reviews, test files inline
+    for (const state of states) {
+      const spinner = ora(`Fetching ${state} PRs from ${repoFull} (GraphQL)...`).start();
+      const prs = await github.fetchPRsGraphQL({
+        since, state, maxItems: config.max_prs,
+        onProgress: (fetched, total) => { spinner.text = `Fetching ${state} PRs... ${fetched}/${total}`; },
+      });
+      spinner.succeed(`Fetched ${prs.length} ${state} PRs (with CI, reviews, tests)`);
+
+      const issueSpinner = ora(`Fetching ${state} issues...`).start();
+      const issues = await github.fetchIssuesGraphQL({
+        since, state, maxItems: config.max_prs,
+        onProgress: (fetched, total) => { issueSpinner.text = `Fetching ${state} issues... ${fetched}/${total}`; },
+      });
+      issueSpinner.succeed(`Fetched ${issues.length} ${state} issues`);
+
+      allItems.push(...prs, ...issues);
+    }
   }
 
   const rl = github.getRateLimit();
   console.log(chalk.dim(`API budget: ${rl.remaining}/${rl.limit} remaining`));
-
-  // Deep scan: fetch CI status, review count, test file detection for PRs
-  if (!opts.skipDeepScan) {
-    const prItems = allItems.filter(i => i.type === "pr");
-    if (prItems.length > 0) {
-      const deepSpinner = ora(`Deep scanning ${prItems.length} PRs (CI, reviews, tests)...`).start();
-      let done = 0;
-      for (const pr of prItems) {
-        const [ciStatus, reviewCount, changedFiles] = await Promise.all([
-          github.fetchCIStatus(pr.number),
-          github.fetchReviewCount(pr.number),
-          github.fetchChangedFiles(pr.number),
-        ]);
-        pr.ciStatus = ciStatus;
-        pr.reviewCount = reviewCount;
-        pr.hasTests = hasTestFiles(changedFiles);
-        done++;
-        if (done % 10 === 0) deepSpinner.text = `Deep scanning... ${done}/${prItems.length}`;
-        // Small delay to be nice to the API
-        await new Promise(r => setTimeout(r, 100));
-      }
-      deepSpinner.succeed(`Deep scanned ${prItems.length} PRs`);
-    }
-  }
 
   // Filter unchanged
   const newItems: PRItem[] = [];
@@ -410,11 +404,11 @@ program
   .option("-r, --repo <owner/repo>", "Repository to scan")
   .option("-s, --since <duration>", "Only fetch items updated within duration (e.g., 7d, 2w, 1m)")
   .option("--state <states>", "PR states to fetch (open,closed)", "open")
-  .option("--skip-deep-scan", "Skip fetching CI status, reviews, and test detection per PR")
+  .option("--rest", "Use REST API instead of GraphQL (no deep scan signals)")
   .action(async (opts) => {
     const ctx = await createPipelineContext(opts.repo);
     try {
-      await runScan(ctx, { since: opts.since, state: opts.state, skipDeepScan: opts.skipDeepScan });
+      await runScan(ctx, { since: opts.since, state: opts.state, useRest: opts.rest });
     } finally {
       ctx.store.close();
     }
@@ -564,14 +558,14 @@ program
   .option("-r, --repo <owner/repo>", "Repository")
   .option("--apply-labels", "Apply all labels")
   .option("--dry-run", "Show what would happen without applying")
-  .option("--skip-deep-scan", "Skip per-PR deep scanning during scan phase")
+  .option("--rest", "Use REST API instead of GraphQL")
   .action(async (opts) => {
     console.log(chalk.bold("🔍 pr-prism triage\n"));
     console.log(chalk.dim("Running: scan → dupes → rank → vision\n"));
 
     const ctx = await createPipelineContext(opts.repo);
     try {
-      await runScan(ctx, { skipDeepScan: opts.skipDeepScan });
+      await runScan(ctx, { useRest: opts.rest });
       console.log();
 
       await runDupes(ctx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun });
