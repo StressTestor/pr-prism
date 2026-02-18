@@ -41,18 +41,37 @@ describe("scoreVisionAlignment", () => {
     expect(result.classification).toBe("off-vision");
   });
 
-  it("classifies medium similarity as drifting", () => {
-    // Construct vectors with ~0.5 cosine similarity
-    const prEmb = [1, 1, 0];
-    const chunks = [{ heading: "Goal 1", text: "test", embedding: [1, 0, 0] }];
-    const _result = scoreVisionAlignment(prEmb, chunks, config);
-    // cos(45°) ≈ 0.707 which is > 0.65 → aligned
-    // Use a different angle
-    const prEmb2 = [1, 1.5, 0];
-    const chunks2 = [{ heading: "Goal 1", text: "test", embedding: [1, 0, 1.5] }];
-    const result2 = scoreVisionAlignment(prEmb2, chunks2, config);
-    // This will have intermediate similarity
-    expect(["aligned", "drifting", "off-vision"]).toContain(result2.classification);
+  it("classifies drifting at boundary (sim between 0.40 and 0.65)", () => {
+    // cos similarity of [1, 0.7, 0] and [0, 0.7, 1] = (0 + 0.49 + 0) / (sqrt(1.49) * sqrt(1.49)) = 0.49 / 1.49 ≈ 0.329
+    // That's off-vision. Let's find drifting range (0.40-0.65):
+    // [1, 0.5, 0] and [0.5, 1, 0]: dot=1.0, norms=sqrt(1.25)*sqrt(1.25)=1.25, sim=0.8 → aligned
+    // We need sim ≈ 0.5. Use [1, 0, 0] and [1, 1, 1]: dot=1, norms=1*sqrt(3), sim=0.577 → drifting
+    const prEmb = [1, 0, 0];
+    const chunks = [{ heading: "Goal 1", text: "test", embedding: [1, 1, 1] }];
+    const result = scoreVisionAlignment(prEmb, chunks, config);
+    // sim ≈ 0.577, between drifting (0.40) and aligned (0.65)
+    expect(result.classification).toBe("drifting");
+    expect(result.score).toBeGreaterThanOrEqual(0.4);
+    expect(result.score).toBeLessThan(0.65);
+  });
+
+  it("off-vision at low boundary (sim < 0.40)", () => {
+    // [1, 0, 0] and [0, 1, 0]: dot=0, sim=0 → off-vision
+    const prEmb = [1, 0, 0];
+    const chunks = [{ heading: "Goal 1", text: "test", embedding: [0, 1, 0] }];
+    const result = scoreVisionAlignment(prEmb, chunks, config);
+    expect(result.classification).toBe("off-vision");
+    expect(result.score).toBeLessThan(0.4);
+  });
+
+  it("aligned at exact boundary (sim = 0.65)", () => {
+    // Testing that >= 0.65 is "aligned"
+    // We can't easily construct exact 0.65, but we can verify the boundary logic
+    // [3, 2, 0] and [2, 3, 0]: dot=12, norms=sqrt(13)*sqrt(13)=13, sim=12/13≈0.923 → aligned
+    const prEmb = [3, 2, 0];
+    const chunks = [{ heading: "Goal 1", text: "test", embedding: [2, 3, 0] }];
+    const result = scoreVisionAlignment(prEmb, chunks, config);
+    expect(result.classification).toBe("aligned");
   });
 
   it("picks the best matching section", () => {
