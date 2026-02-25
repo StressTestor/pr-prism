@@ -124,8 +124,27 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
 
     let totalSim = 0,
       pairs = 0;
-    for (let i = 0; i < component.length; i++) {
-      for (let j = i + 1; j < component.length; j++) {
+    const MAX_PAIRS = 100;
+    const totalPossiblePairs = (component.length * (component.length - 1)) / 2;
+    if (totalPossiblePairs <= MAX_PAIRS) {
+      for (let i = 0; i < component.length; i++) {
+        for (let j = i + 1; j < component.length; j++) {
+          const embA = embeddings.get(component[i])!;
+          const embB = embeddings.get(component[j])!;
+          totalSim += cosineSimilarity(embA, embB);
+          pairs++;
+        }
+      }
+    } else {
+      // Random sample of pairs
+      const sampled = new Set<string>();
+      while (pairs < MAX_PAIRS) {
+        const i = Math.floor(Math.random() * component.length);
+        let j = Math.floor(Math.random() * (component.length - 1));
+        if (j >= i) j++;
+        const key = i < j ? `${i}:${j}` : `${j}:${i}`;
+        if (sampled.has(key)) continue;
+        sampled.add(key);
         const embA = embeddings.get(component[i])!;
         const embB = embeddings.get(component[j])!;
         totalSim += cosineSimilarity(embA, embB);

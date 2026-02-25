@@ -3,6 +3,7 @@
  * Accepts Float32Array or number[] — both work since we only use index access.
  */
 export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  if (a.length !== b.length) throw new Error(`dimension mismatch: ${a.length} vs ${b.length}`);
   let dot = 0,
     normA = 0,
     normB = 0;
