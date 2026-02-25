@@ -33,6 +33,7 @@ export class GitHubClient {
   private octokit: Octokit;
   private owner: string;
   private repo: string;
+  // Initial rate limit is an estimate — actual values are populated after the first API response
   private rateLimit: RateLimitInfo = { remaining: 5000, limit: 5000, resetAt: new Date() };
 
   constructor(token: string, owner: string, repo: string) {

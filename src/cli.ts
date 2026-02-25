@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import Table from "cli-table3";
 import { Command } from "commander";
@@ -17,12 +19,15 @@ import { VectorStore } from "./store.js";
 import type { PRItem, StoreItem } from "./types.js";
 import { checkVisionAlignment } from "./vision.js";
 
+const _require = createRequire(import.meta.url);
+const pkg = _require("../package.json");
+
 const program = new Command();
 
 program
   .name("prism")
   .description("BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale")
-  .version("0.8.0");
+  .version(pkg.version);
 
 // ── helpers ─────────────────────────────────────────────────────
 export function parseDuration(s: string): string {
@@ -67,6 +72,7 @@ async function createPipelineContext(repoOverride?: string): Promise<PipelineCon
         `use a value <= ${embedder.dimensions} or remove EMBEDDING_DIMENSIONS.`,
     );
   }
+  const nativeDims = embedder.dimensions;
   const effectiveDims = targetDims || embedder.dimensions;
 
   // Wrap embedder to truncate if needed
@@ -180,7 +186,7 @@ export async function runScan(
     store.setMeta("embedding_model", env.EMBEDDING_MODEL);
     store.setMeta("embedding_dimensions", String(embedder.dimensions));
     if (env.EMBEDDING_DIMENSIONS) {
-      store.setMeta("embedding_dimensions_native", String(env.EMBEDDING_DIMENSIONS));
+      store.setMeta("embedding_dimensions_native", String(nativeDims));
     }
     store.setMeta("schema_version", "1");
   }
@@ -256,6 +262,7 @@ export async function runScan(
           ciStatus: item.ciStatus,
           reviewCount: item.reviewCount,
           hasTests: item.hasTests,
+          bodyLength: item.body.length,
         },
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
@@ -460,6 +467,7 @@ export async function runVision(
       const content = await github.fetchFileContent(candidate);
       if (content) {
         const localPath = resolve(process.cwd(), "data", candidate);
+        mkdirSync(resolve(process.cwd(), "data"), { recursive: true });
         writeFileSync(localPath, content);
         docPath = localPath;
         fetchSpinner.succeed(`Using ${candidate} from repo as vision document`);
@@ -523,8 +531,9 @@ program
   .command("init")
   .description("Initialize pr-prism configuration in current directory")
   .action(async () => {
-    const envExample = resolve(import.meta.dirname, "..", ".env.example");
-    const configExample = resolve(import.meta.dirname, "..", "prism.config.yaml");
+    const __dirname = import.meta.dirname ?? fileURLToPath(new URL(".", import.meta.url));
+    const envExample = resolve(__dirname, "..", ".env.example");
+    const configExample = resolve(__dirname, "..", "prism.config.yaml");
 
     if (!existsSync(".env") && existsSync(envExample)) {
       copyFileSync(envExample, ".env");
@@ -972,6 +981,7 @@ program
         const content = await github.fetchFileContent(candidate);
         if (content) {
           const localPath = resolve(process.cwd(), "data", candidate);
+          mkdirSync(resolve(process.cwd(), "data"), { recursive: true });
           writeFileSync(localPath, content);
           visionDocPath = localPath;
           break;

@@ -33,7 +33,7 @@ export class VectorStore {
     if (tableCheck && this.dimensions > 0) {
       const row = this.db.prepare("SELECT embedding FROM vec_items LIMIT 1").get() as any;
       if (row) {
-        const existingDim = new Float32Array(row.embedding.buffer).length;
+        const existingDim = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4).length;
         if (existingDim !== this.dimensions) {
           this.db.close();
           throw new Error(
@@ -46,7 +46,7 @@ export class VectorStore {
       // Read-only mode: detect dimensions from existing data
       const row = this.db.prepare("SELECT embedding FROM vec_items LIMIT 1").get() as any;
       if (row) {
-        this.dimensions = new Float32Array(row.embedding.buffer).length;
+        this.dimensions = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4).length;
       }
     }
 
@@ -126,7 +126,10 @@ export class VectorStore {
 
   upsertEmbeddingOnly(id: string, embedding: Float32Array): void {
     this.db.prepare("DELETE FROM vec_items WHERE id = ?").run(id);
-    this.db.prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)").run(id, Buffer.from(embedding.buffer));
+    this.db.prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)").run(
+      id,
+      Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
+    );
   }
 
   upsert(item: StoreItem): void {
@@ -155,7 +158,10 @@ export class VectorStore {
       );
 
     this.db.prepare("DELETE FROM vec_items WHERE id = ?").run(id);
-    this.db.prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)").run(id, Buffer.from(item.embedding.buffer));
+    this.db.prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)").run(
+      id,
+      Buffer.from(item.embedding.buffer, item.embedding.byteOffset, item.embedding.byteLength),
+    );
   }
 
   search(embedding: Float32Array, limit = 20, threshold = 0.0): Array<{ id: string; distance: number }> {
@@ -167,7 +173,7 @@ export class VectorStore {
       ORDER BY distance
       LIMIT ?
     `)
-      .all(Buffer.from(embedding.buffer), limit) as Array<{ id: string; distance: number }>;
+      .all(Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), limit) as Array<{ id: string; distance: number }>;
 
     // sqlite-vec returns cosine distance when using vec0 with float arrays
     // cosine similarity = 1 - cosine distance
@@ -240,7 +246,7 @@ export class VectorStore {
   getEmbedding(id: string): Float32Array | undefined {
     const row = this.db.prepare("SELECT embedding FROM vec_items WHERE id = ?").get(id) as any;
     if (!row) return undefined;
-    return new Float32Array(row.embedding.buffer);
+    return new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4);
   }
 
   getAllEmbeddings(repo: string): Map<string, Float32Array> {
@@ -249,7 +255,7 @@ export class VectorStore {
       .all(repo) as any[];
     const map = new Map<string, Float32Array>();
     for (const row of rows) {
-      map.set(row.id, new Float32Array(row.embedding.buffer));
+      map.set(row.id, new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4));
     }
     return map;
   }

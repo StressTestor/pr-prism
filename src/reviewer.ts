@@ -120,9 +120,18 @@ class AnthropicLLM implements LLMProvider {
   async completeJSON<T>(prompt: string, systemPrompt?: string): Promise<T> {
     const text = await this.complete(prompt, systemPrompt);
     // Extract JSON from response (Anthropic doesn't have JSON mode)
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("Failed to extract JSON from Anthropic response");
-    return JSON.parse(match[0]);
+    // Use balanced brace extraction instead of greedy regex
+    const startIdx = text.indexOf("{");
+    if (startIdx === -1) throw new Error("Failed to extract JSON from Anthropic response");
+    let depth = 0;
+    let endIdx = -1;
+    for (let i = startIdx; i < text.length; i++) {
+      if (text[i] === "{") depth++;
+      else if (text[i] === "}") depth--;
+      if (depth === 0) { endIdx = i; break; }
+    }
+    if (endIdx === -1) throw new Error("Failed to extract JSON from Anthropic response");
+    return JSON.parse(text.slice(startIdx, endIdx + 1));
   }
 }
 
@@ -165,9 +174,16 @@ Analyze this PR and respond with JSON only.`;
   } catch {
     // Fallback: try plain completion and parse
     const text = await llm.complete(prompt, REVIEW_SYSTEM_PROMPT);
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("LLM did not return valid JSON");
-    result = JSON.parse(match[0]);
+    const si = text.indexOf("{");
+    if (si === -1) throw new Error("LLM did not return valid JSON");
+    let d = 0, ei = -1;
+    for (let i = si; i < text.length; i++) {
+      if (text[i] === "{") d++;
+      else if (text[i] === "}") d--;
+      if (d === 0) { ei = i; break; }
+    }
+    if (ei === -1) throw new Error("LLM did not return valid JSON");
+    result = JSON.parse(text.slice(si, ei + 1));
   }
 
   return ReviewResultSchema.parse(result);

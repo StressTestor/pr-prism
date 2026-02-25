@@ -44,7 +44,7 @@ const ConfigSchema = z.object({
 export type PrismConfig = z.infer<typeof ConfigSchema>;
 
 const EnvSchema = z.object({
-  GITHUB_TOKEN: z.string(),
+  GITHUB_TOKEN: z.string().min(1),
   EMBEDDING_PROVIDER: z.enum(["openai", "kimi", "ollama", "voyageai", "jina"]).default("openai"),
   EMBEDDING_API_KEY: z.string().optional(),
   EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
@@ -63,7 +63,7 @@ export function loadConfig(configPath?: string): PrismConfig {
   }
   const raw = parseYaml(readFileSync(p, "utf-8"));
   const parsed = ConfigSchema.parse(raw);
-  if (parsed.version > 1) {
+  if (parsed.version !== 1) {
     throw new Error(
       `config version ${parsed.version} requires a newer version of pr-prism. run \`npm install -g pr-prism\` to upgrade.`,
     );
