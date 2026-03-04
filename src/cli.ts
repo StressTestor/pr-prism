@@ -944,6 +944,7 @@ program
   .option("-r, --repo <owner/repo>", "Repository")
   .option("--apply-labels", "Apply all labels")
   .option("--dry-run", "Show what would happen without applying")
+  .option("-n, --top <number>", "Show top N ranked PRs", "20")
   .option("--rest", "Use REST API instead of GraphQL")
   .action(async (opts) => {
     console.log(chalk.bold("🔍 pr-prism triage\n"));
@@ -957,7 +958,7 @@ program
       await runDupes(ctx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun });
       console.log();
 
-      await runRank(ctx, { top: 20 });
+      await runRank(ctx, { top: parseInt(opts.top, 10) || 20 });
       console.log();
 
       await runVision(ctx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun });
