@@ -2,6 +2,46 @@
 
 all notable changes to pr-prism are documented here.
 
+## [1.0.0] — 2026-03-04
+
+### added
+- multi-repo support: `repos: [a/b, c/d]` config, cross-repo dupe detection
+- per-repo vision docs: `vision_docs:` config field
+- `prism stats` command with embedding coverage, model metadata, per-repo breakdown
+- `prism review --top N` batch review mode
+- `prism review --type issue` for issue reviews
+- `prism review --show` for historical review lookup
+- review storage in database (persists across sessions)
+- `prism vision --stats` distribution histogram and section breakdown
+- `prism vision --detail` per-item alignment table
+- `--state all` on scan (open + closed)
+- full `prism init` auto-detection (ollama models, env var API keys, best provider recommendation)
+- embedding config hash tracking (warns on provider changes)
+- cluster scoring upgrade: uses full quality signals (tests, CI, diff size, reviews, recency)
+
+### changed
+- README rewritten for v1.0 with badge row, quickstart, pipeline diagram, provider table
+- `prism status` aliased as `prism stats`
+- review command accepts optional number arg (was required positional)
+
+## [0.9.0] — 2026-03-04
+
+### added
+- npm publish readiness (engines >= 20.0.0, prepublishOnly, files array)
+- GitHub Actions CI pipeline (Node 20+22 matrix, build/lint/test/smoke)
+- CHANGELOG.md, CONTRIBUTING.md
+- unified error handling across all providers (ProviderError class)
+- embedding progress persistence (crash recovery)
+- `prism doctor` diagnostic command
+- `prism init` with zero-cost setup guide
+- `--top N` flag on triage
+- `--output markdown` flag on dupes, vision, triage
+- `dupes --cluster` shows available cluster IDs on invalid ID
+- matryoshka benchmark (512 vs 1024 dims, 91.1% agreement)
+
+### fixed
+- Node 20 LTS compatibility (replaced import.meta.dirname with fileURLToPath)
+
 ## [0.8.0] — 2026-02-28
 
 ### changed
