@@ -138,7 +138,10 @@ class AnthropicLLM implements LLMProvider {
     for (let i = startIdx; i < text.length; i++) {
       if (text[i] === "{") depth++;
       else if (text[i] === "}") depth--;
-      if (depth === 0) { endIdx = i; break; }
+      if (depth === 0) {
+        endIdx = i;
+        break;
+      }
     }
     if (endIdx === -1) throw new Error("Failed to extract JSON from Anthropic response");
     return JSON.parse(text.slice(startIdx, endIdx + 1));
@@ -186,11 +189,15 @@ Analyze this PR and respond with JSON only.`;
     const text = await llm.complete(prompt, REVIEW_SYSTEM_PROMPT);
     const si = text.indexOf("{");
     if (si === -1) throw new Error("LLM did not return valid JSON");
-    let d = 0, ei = -1;
+    let d = 0,
+      ei = -1;
     for (let i = si; i < text.length; i++) {
       if (text[i] === "{") d++;
       else if (text[i] === "}") d--;
-      if (d === 0) { ei = i; break; }
+      if (d === 0) {
+        ei = i;
+        break;
+      }
     }
     if (ei === -1) throw new Error("LLM did not return valid JSON");
     result = JSON.parse(text.slice(si, ei + 1));
