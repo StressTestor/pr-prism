@@ -33,7 +33,11 @@ export class VectorStore {
     if (tableCheck && this.dimensions > 0) {
       const row = this.db.prepare("SELECT embedding FROM vec_items LIMIT 1").get() as any;
       if (row) {
-        const existingDim = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4).length;
+        const existingDim = new Float32Array(
+          row.embedding.buffer,
+          row.embedding.byteOffset,
+          row.embedding.byteLength / 4,
+        ).length;
         if (existingDim !== this.dimensions) {
           this.db.close();
           throw new Error(
@@ -46,7 +50,11 @@ export class VectorStore {
       // Read-only mode: detect dimensions from existing data
       const row = this.db.prepare("SELECT embedding FROM vec_items LIMIT 1").get() as any;
       if (row) {
-        this.dimensions = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4).length;
+        this.dimensions = new Float32Array(
+          row.embedding.buffer,
+          row.embedding.byteOffset,
+          row.embedding.byteLength / 4,
+        ).length;
       }
     }
 
@@ -126,10 +134,9 @@ export class VectorStore {
 
   upsertEmbeddingOnly(id: string, embedding: Float32Array): void {
     this.db.prepare("DELETE FROM vec_items WHERE id = ?").run(id);
-    this.db.prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)").run(
-      id,
-      Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
-    );
+    this.db
+      .prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)")
+      .run(id, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength));
   }
 
   upsert(item: StoreItem): void {
@@ -158,10 +165,9 @@ export class VectorStore {
       );
 
     this.db.prepare("DELETE FROM vec_items WHERE id = ?").run(id);
-    this.db.prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)").run(
-      id,
-      Buffer.from(item.embedding.buffer, item.embedding.byteOffset, item.embedding.byteLength),
-    );
+    this.db
+      .prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)")
+      .run(id, Buffer.from(item.embedding.buffer, item.embedding.byteOffset, item.embedding.byteLength));
   }
 
   search(embedding: Float32Array, limit = 20, threshold = 0.0): Array<{ id: string; distance: number }> {
@@ -173,7 +179,10 @@ export class VectorStore {
       ORDER BY distance
       LIMIT ?
     `)
-      .all(Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), limit) as Array<{ id: string; distance: number }>;
+      .all(Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), limit) as Array<{
+      id: string;
+      distance: number;
+    }>;
 
     // sqlite-vec returns cosine distance when using vec0 with float arrays
     // cosine similarity = 1 - cosine distance
@@ -258,6 +267,66 @@ export class VectorStore {
       map.set(row.id, new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4));
     }
     return map;
+  }
+
+  getAllItemsMulti(repos: string[]): StoreItem[] {
+    if (repos.length === 1) return this.getAllItems(repos[0]);
+    const placeholders = repos.map(() => "?").join(",");
+    const rows = this.db.prepare(`SELECT * FROM items WHERE repo IN (${placeholders})`).all(...repos) as any[];
+    return rows.map((row) => {
+      const metadata = JSON.parse(row.metadata_json);
+      return {
+        id: row.id,
+        type: row.type,
+        number: row.number,
+        repo: row.repo,
+        title: row.title,
+        bodySnippet: row.body_snippet,
+        embedding: new Float32Array(0), // lightweight — use getAllEmbeddings for vectors
+        metadata,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      } as StoreItem;
+    });
+  }
+
+  getAllEmbeddingsMulti(repos: string[]): Map<string, Float32Array> {
+    if (repos.length === 1) return this.getAllEmbeddings(repos[0]);
+    const placeholders = repos.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(
+        `SELECT v.id, v.embedding FROM vec_items v INNER JOIN items i ON v.id = i.id WHERE i.repo IN (${placeholders})`,
+      )
+      .all(...repos) as any[];
+    const map = new Map<string, Float32Array>();
+    for (const row of rows) {
+      map.set(row.id, new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4));
+    }
+    return map;
+  }
+
+  getStatsMulti(repos: string[]): { totalItems: number; prs: number; issues: number; diffs: number } {
+    if (repos.length === 1) return this.getStats(repos[0]);
+    const placeholders = repos.map(() => "?").join(",");
+    const total =
+      (this.db.prepare(`SELECT COUNT(*) as c FROM items WHERE repo IN (${placeholders})`).all(...repos) as any[])[0]
+        ?.c ?? 0;
+    const prs =
+      (
+        this.db
+          .prepare(`SELECT COUNT(*) as c FROM items WHERE repo IN (${placeholders}) AND type = 'pr'`)
+          .all(...repos) as any[]
+      )[0]?.c ?? 0;
+    const issues =
+      (
+        this.db
+          .prepare(`SELECT COUNT(*) as c FROM items WHERE repo IN (${placeholders}) AND type = 'issue'`)
+          .all(...repos) as any[]
+      )[0]?.c ?? 0;
+    const diffs =
+      (this.db.prepare(`SELECT COUNT(*) as c FROM diffs WHERE repo IN (${placeholders})`).all(...repos) as any[])[0]
+        ?.c ?? 0;
+    return { totalItems: total, prs, issues, diffs };
   }
 
   cacheDiff(repo: string, number: number, patchText: string): void {

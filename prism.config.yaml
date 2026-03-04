@@ -1,6 +1,20 @@
 version: 1
+
+# single repo
 repo: owner/repo
+
+# multi-repo (overrides repo)
+# repos:
+#   - owner/repo1
+#   - owner/repo2
+#   - owner/repo3
+
 vision_doc: ./VISION.md
+
+# per-repo vision docs (overrides vision_doc for specific repos)
+# vision_docs:
+#   owner/repo1: ./VISION_1.md
+#   owner/repo2: ./VISION_2.md
 
 thresholds:
   duplicate_similarity: 0.85
