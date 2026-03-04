@@ -52,7 +52,7 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
     for (const id of ids) {
       const emb = embeddings.get(id)!;
       const candidates = store.search(emb, K, opts.threshold);
-      for (const { id: candidateId, distance } of candidates) {
+      for (const { id: candidateId } of candidates) {
         if (candidateId === id) continue;
         if (!embeddings.has(candidateId)) continue;
         // Verify with exact cosine similarity
