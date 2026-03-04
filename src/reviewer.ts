@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { classifyHttpError } from "./errors.js";
 import type { LLMProvider, ReviewResult } from "./types.js";
 
 const ReviewResultSchema = z.object({
@@ -39,7 +40,10 @@ class OpenAILLM implements LLMProvider {
       },
       body: JSON.stringify({ model: this.model, messages, temperature: 0.3 }),
     });
-    if (!resp.ok) throw new Error(`LLM API error (${resp.status}): ${await resp.text()}`);
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw classifyHttpError("LLM", resp.status, body, { apiKeyEnvVar: "LLM_API_KEY" });
+    }
     const data = (await resp.json()) as any;
     return data.choices[0].message.content;
   }
@@ -62,7 +66,10 @@ class OpenAILLM implements LLMProvider {
         response_format: { type: "json_object" },
       }),
     });
-    if (!resp.ok) throw new Error(`LLM API error (${resp.status}): ${await resp.text()}`);
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw classifyHttpError("LLM", resp.status, body, { apiKeyEnvVar: "LLM_API_KEY" });
+    }
     const data = (await resp.json()) as any;
     return JSON.parse(data.choices[0].message.content);
   }
@@ -112,7 +119,10 @@ class AnthropicLLM implements LLMProvider {
       },
       body: JSON.stringify(body),
     });
-    if (!resp.ok) throw new Error(`Anthropic error (${resp.status}): ${await resp.text()}`);
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw classifyHttpError("Anthropic", resp.status, body, { apiKeyEnvVar: "LLM_API_KEY" });
+    }
     const data = (await resp.json()) as any;
     return data.content[0].text;
   }

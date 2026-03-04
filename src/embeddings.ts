@@ -1,3 +1,4 @@
+import { classifyFetchError, classifyHttpError } from "./errors.js";
 import type { EmbeddingProvider } from "./types.js";
 
 interface ProviderConfig {
@@ -40,8 +41,8 @@ class OpenAIEmbeddings implements EmbeddingProvider {
       body: JSON.stringify({ input: sanitized, model: this.model }),
     });
     if (!resp.ok) {
-      const err = await resp.text();
-      throw new Error(`Embedding API error (${resp.status}): ${err}`);
+      const body = await resp.text();
+      throw classifyHttpError("OpenAI Embeddings", resp.status, body, { apiKeyEnvVar: "EMBEDDING_API_KEY" });
     }
     const data = (await resp.json()) as any;
     return data.data.map((d: any) => d.embedding);
@@ -99,12 +100,12 @@ class OllamaEmbeddings implements EmbeddingProvider {
         body: JSON.stringify({ model: this.model, input: texts }),
       });
     } catch (err: any) {
-      if (err.code === "ECONNREFUSED") {
-        throw new Error(`Ollama not running — start it with: ollama serve`);
-      }
-      throw err;
+      throw classifyFetchError("Ollama", err);
     }
-    if (!resp.ok) throw new Error(`Ollama error (${resp.status}): ${await resp.text()}`);
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw classifyHttpError("Ollama", resp.status, body);
+    }
     const data = (await resp.json()) as any;
     if (!this.initialized) {
       this.dimensions = data.embeddings[0].length;
@@ -139,7 +140,10 @@ class VoyageEmbeddings implements EmbeddingProvider {
       },
       body: JSON.stringify({ input: texts, model: this.model }),
     });
-    if (!resp.ok) throw new Error(`VoyageAI error (${resp.status})`);
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw classifyHttpError("VoyageAI", resp.status, body, { apiKeyEnvVar: "EMBEDDING_API_KEY" });
+    }
     const data = (await resp.json()) as any;
     this.dimensions = data.data[0].embedding.length;
     return data.data.map((d: any) => d.embedding);

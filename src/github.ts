@@ -1,4 +1,5 @@
 import { Octokit } from "@octokit/rest";
+import { ProviderError } from "./errors.js";
 import type { VectorStore } from "./store.js";
 import type { PRItem, RateLimitInfo } from "./types.js";
 
@@ -87,9 +88,14 @@ export class GitHubClient {
           await new Promise((r) => setTimeout(r, waitMs));
           continue;
         }
-        // 403 permission error (not rate limit) — fail immediately
+        // 403 permission error (not rate limit) — fail with actionable message
         if (err.status === 403) {
-          throw err;
+          throw new ProviderError(
+            "GitHub",
+            "Token lacks required scopes",
+            "Needs `repo` for private repos, `public_repo` for public. Generate at https://github.com/settings/tokens",
+            403,
+          );
         }
         // Other transient errors — retry with backoff
         if (attempt < 2 && (err.status === 502 || err.status === 503 || err.status === 500)) {
