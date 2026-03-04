@@ -6,9 +6,9 @@ interface ScorerContext {
   authorMergeCounts: Map<string, number>;
 }
 
-function normalizeDescriptionQuality(body: string): number {
+function normalizeDescriptionQuality(body: string, bodyLength?: number): number {
   if (!body) return 0;
-  const len = body.length;
+  const len = bodyLength ?? body.length;
   if (len < 50) return 0.1;
   if (len < 200) return 0.3 + ((len - 50) / 150) * 0.3;
   if (len < 1000) return 0.6 + ((len - 200) / 800) * 0.3;
@@ -68,15 +68,16 @@ export function scorePR(item: PRItem, config: PrismConfig, context: ScorerContex
     ciPassing: item.ciStatus === "success" ? 1 : item.ciStatus === "failure" ? 0 : 0.5,
     diffSize: hasDiffStats ? normalizeDiffSize(item.additions!, item.deletions!) : -1,
     authorHistory: normalizeAuthorHistory(authorMerges),
-    descriptionQuality: normalizeDescriptionQuality(item.body),
+    descriptionQuality: normalizeDescriptionQuality(item.body, (item as any).metadata?.bodyLength),
     reviewApprovals: Math.min(1.0, (item.reviewCount || 0) / 3),
     recency: 0.5 ** ((Date.now() - new Date(item.updatedAt).getTime()) / (1000 * 60 * 60 * 24 * 30)),
   };
 
   let effectiveWeights = { ...weights };
   if (!hasDiffStats) {
-    const redistributed = weights.diff_size_penalty;
-    const otherTotal = 1 - redistributed;
+    const otherTotal =
+      weights.has_tests + weights.ci_passing + weights.author_history +
+      weights.description_quality + weights.review_approvals;
     effectiveWeights = {
       has_tests: weights.has_tests / otherTotal,
       ci_passing: weights.ci_passing / otherTotal,
