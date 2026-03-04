@@ -1,6 +1,6 @@
 {
   "name": "pr-prism",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "description": "BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale",
   "type": "module",
   "main": "dist/index.js",
@@ -36,10 +36,16 @@
   "keywords": [
     "github",
     "pr-triage",
+    "pull-request",
     "duplicate-detection",
+    "code-review",
     "ai",
     "embeddings",
-    "byok"
+    "similarity",
+    "byok",
+    "cli",
+    "devtools",
+    "maintainer-tools"
   ],
   "license": "MIT",
   "dependencies": {
