@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
@@ -186,7 +186,7 @@ export async function runScan(
     store.setMeta("embedding_model", env.EMBEDDING_MODEL);
     store.setMeta("embedding_dimensions", String(embedder.dimensions));
     if (env.EMBEDDING_DIMENSIONS) {
-      store.setMeta("embedding_dimensions_native", String(nativeDims));
+      store.setMeta("embedding_dimensions_native", String(env.EMBEDDING_DIMENSIONS));
     }
     store.setMeta("schema_version", "1");
   }
@@ -531,7 +531,7 @@ program
   .command("init")
   .description("Initialize pr-prism configuration in current directory")
   .action(async () => {
-    const __dirname = import.meta.dirname ?? fileURLToPath(new URL(".", import.meta.url));
+    const __dirname = dirname(fileURLToPath(import.meta.url));
     const envExample = resolve(__dirname, "..", ".env.example");
     const configExample = resolve(__dirname, "..", "prism.config.yaml");
 
