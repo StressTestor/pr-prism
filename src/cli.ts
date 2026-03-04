@@ -615,7 +615,15 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number; explai
 
 export async function runVision(
   ctx: PipelineContext,
-  opts: { doc?: string; applyLabels?: boolean; dryRun?: boolean; json?: boolean; output?: string },
+  opts: {
+    doc?: string;
+    applyLabels?: boolean;
+    dryRun?: boolean;
+    json?: boolean;
+    output?: string;
+    stats?: boolean;
+    detail?: boolean;
+  },
 ) {
   const { config, env, owner, repo, repoFull, github, store } = ctx;
   let docPath = opts.doc || getVisionDoc(config, repoFull);
@@ -675,7 +683,68 @@ export async function runVision(
   console.log(chalk.yellow(`  Drifting: ${drifting.length}`));
   console.log(chalk.red(`  Off-vision: ${offVision.length}`));
 
-  if (offVision.length > 0) {
+  // Stats: histogram and section breakdown
+  if (opts.stats) {
+    const total = scores.length;
+    const pctAligned = ((aligned.length / total) * 100).toFixed(0);
+    const pctDrifting = ((drifting.length / total) * 100).toFixed(0);
+    const pctOff = ((offVision.length / total) * 100).toFixed(0);
+    const barWidth = 40;
+    const barA = chalk.green("█".repeat(Math.round((aligned.length / total) * barWidth)));
+    const barD = chalk.yellow("█".repeat(Math.round((drifting.length / total) * barWidth)));
+    const barO = chalk.red("█".repeat(Math.round((offVision.length / total) * barWidth)));
+
+    console.log(chalk.bold("\n  distribution:"));
+    console.log(`  aligned  ${barA} ${pctAligned}% (${aligned.length})`);
+    console.log(`  drifting ${barD} ${pctDrifting}% (${drifting.length})`);
+    console.log(`  off      ${barO} ${pctOff}% (${offVision.length})`);
+
+    // Section breakdown
+    const sectionCounts = new Map<string, { aligned: number; drifting: number; off: number }>();
+    for (const s of scores) {
+      const section = s.matchedSection || "(no match)";
+      const entry = sectionCounts.get(section) || { aligned: 0, drifting: 0, off: 0 };
+      if (s.classification === "aligned") entry.aligned++;
+      else if (s.classification === "drifting") entry.drifting++;
+      else entry.off++;
+      sectionCounts.set(section, entry);
+    }
+
+    if (sectionCounts.size > 0) {
+      console.log(chalk.bold("\n  section breakdown:"));
+      const sectionTable = new Table({
+        head: ["Section", "Aligned", "Drifting", "Off"],
+        colWidths: [40, 10, 10, 10],
+      });
+      const sorted = [...sectionCounts.entries()].sort(
+        (a, b) => b[1].aligned + b[1].drifting + b[1].off - (a[1].aligned + a[1].drifting + a[1].off),
+      );
+      for (const [section, counts] of sorted.slice(0, 15)) {
+        sectionTable.push([section.slice(0, 38), counts.aligned, counts.drifting, counts.off]);
+      }
+      console.log(sectionTable.toString());
+    }
+  }
+
+  // Detail: per-item table
+  if (opts.detail) {
+    console.log(chalk.bold("\n  per-item detail:"));
+    const detailTable = new Table({
+      head: ["#", "Score", "Status", "Matched Section"],
+      colWidths: [8, 8, 12, 50],
+    });
+    const statusColor = (c: string) =>
+      c === "aligned" ? chalk.green(c) : c === "drifting" ? chalk.yellow(c) : chalk.red(c);
+    for (const s of scores.slice(0, 50)) {
+      detailTable.push([s.prNumber, s.score.toFixed(2), statusColor(s.classification), s.matchedSection.slice(0, 48)]);
+    }
+    console.log(detailTable.toString());
+    if (scores.length > 50) {
+      console.log(chalk.dim(`  ... and ${scores.length - 50} more (${scores.length} total)`));
+    }
+  }
+
+  if (offVision.length > 0 && !opts.detail) {
     console.log(chalk.bold("\nOff-vision PRs:"));
     const table = new Table({ head: ["#", "Score", "Matched Section"], colWidths: [8, 8, 50] });
     for (const s of offVision.slice(0, 20)) {
@@ -1137,6 +1206,8 @@ program
   .option("--dry-run", "Show what would be labeled")
   .option("--json", "Output results as NDJSON")
   .option("--output <format>", "Output format: markdown")
+  .option("--stats", "Show distribution histogram and section breakdown")
+  .option("--detail", "Show per-item alignment detail")
   .action(async (opts) => {
     if (opts.json && opts.output) {
       console.error(chalk.red("Cannot use --json and --output together"));
@@ -1150,6 +1221,8 @@ program
         dryRun: opts.dryRun,
         json: opts.json,
         output: opts.output,
+        stats: opts.stats,
+        detail: opts.detail,
       });
     } finally {
       ctx.store.close();

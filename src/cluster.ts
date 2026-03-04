@@ -107,16 +107,38 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
         const item = itemMap.get(cid);
         if (!item) return null;
         const recency = recencyFactor(item.updatedAt);
+        const hasTests = item.hasTests === true ? 1.0 : item.hasTests === false ? 0.0 : 0.5;
+        const ciPassing = item.ciStatus === "success" ? 1 : item.ciStatus === "failure" ? 0 : 0.5;
+        const descQuality = Math.min(1, (item.body?.length || 0) / 500);
+        const reviewApprovals = Math.min(1.0, (item.reviewCount || 0) / 3);
+        const hasDiff = item.additions != null && item.deletions != null;
+        const diffTotal = (item.additions || 0) + (item.deletions || 0);
+        const diffSize = hasDiff
+          ? diffTotal <= 50
+            ? 1.0
+            : diffTotal <= 200
+              ? 0.8
+              : diffTotal <= 500
+                ? 0.6
+                : 0.4
+          : 0.5;
         const signals: ScoreSignals = {
-          hasTests: 0,
-          ciPassing: 0,
-          diffSize: 0,
-          authorHistory: 0,
-          descriptionQuality: Math.min(1, (item.body?.length || 0) / 500),
-          reviewApprovals: 0,
+          hasTests,
+          ciPassing,
+          diffSize: hasDiff ? diffSize : -1,
+          authorHistory: 0.5, // no GitHub context available in clustering
+          descriptionQuality: descQuality,
+          reviewApprovals,
           recency,
         };
-        return { ...item, score: recency * signals.descriptionQuality, signals } as ScoredPR;
+        const score =
+          hasTests * 0.25 +
+          ciPassing * 0.2 +
+          diffSize * 0.15 +
+          descQuality * 0.15 +
+          reviewApprovals * 0.1 +
+          recency * 0.15;
+        return { ...item, score, signals } as ScoredPR;
       })
       .filter((x): x is ScoredPR => x !== null)
       .sort((a, b) => b.score - a.score);
