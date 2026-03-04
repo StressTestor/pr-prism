@@ -76,8 +76,11 @@ export function scorePR(item: PRItem, config: PrismConfig, context: ScorerContex
   let effectiveWeights = { ...weights };
   if (!hasDiffStats) {
     const otherTotal =
-      weights.has_tests + weights.ci_passing + weights.author_history +
-      weights.description_quality + weights.review_approvals;
+      weights.has_tests +
+      weights.ci_passing +
+      weights.author_history +
+      weights.description_quality +
+      weights.review_approvals;
     effectiveWeights = {
       has_tests: weights.has_tests / otherTotal,
       ci_passing: weights.ci_passing / otherTotal,
