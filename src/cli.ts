@@ -318,7 +318,7 @@ export async function runScan(
 
 export async function runDupes(
   ctx: PipelineContext,
-  opts: { threshold?: number; applyLabels?: boolean; dryRun?: boolean; json?: boolean },
+  opts: { threshold?: number; applyLabels?: boolean; dryRun?: boolean; json?: boolean; output?: string },
 ) {
   const { config, env, owner, repo, repoFull, store } = ctx;
   const threshold = opts.threshold ?? config.thresholds.duplicate_similarity;
@@ -347,6 +347,19 @@ export async function runDupes(
         }),
       );
     }
+    return clusters;
+  }
+
+  if (opts.output === "markdown") {
+    let md = `## duplicate clusters\n\n`;
+    md += `| # | Size | Avg Sim | Best Pick | Theme |\n`;
+    md += `|---|------|---------|-----------|-------|\n`;
+    for (const c of clusters) {
+      const theme = c.theme.replace(/\|/g, "\\|").slice(0, 60);
+      md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | #${c.bestPick.number} | ${theme} |\n`;
+    }
+    md += `\nTotal: ${clusters.reduce((s, c) => s + c.items.length, 0)} items across ${clusters.length} clusters\n`;
+    console.log(md);
     return clusters;
   }
 
@@ -473,7 +486,7 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number; explai
 
 export async function runVision(
   ctx: PipelineContext,
-  opts: { doc?: string; applyLabels?: boolean; dryRun?: boolean; json?: boolean },
+  opts: { doc?: string; applyLabels?: boolean; dryRun?: boolean; json?: boolean; output?: string },
 ) {
   const { config, env, owner, repo, repoFull, github, store } = ctx;
   let docPath = opts.doc || config.vision_doc;
@@ -511,6 +524,23 @@ export async function runVision(
   const aligned = scores.filter((s) => s.classification === "aligned");
   const drifting = scores.filter((s) => s.classification === "drifting");
   const offVision = scores.filter((s) => s.classification === "off-vision");
+
+  if (opts.output === "markdown") {
+    let md = `## vision alignment\n\n`;
+    md += `- **Aligned:** ${aligned.length}\n`;
+    md += `- **Drifting:** ${drifting.length}\n`;
+    md += `- **Off-vision:** ${offVision.length}\n`;
+    if (offVision.length > 0) {
+      md += `\n### off-vision items\n\n`;
+      md += `| # | Score | Matched Section |\n`;
+      md += `|---|-------|-----------------|\n`;
+      for (const s of offVision.slice(0, 20)) {
+        md += `| #${s.prNumber} | ${s.score.toFixed(2)} | ${s.matchedSection.replace(/\|/g, "\\|").slice(0, 60)} |\n`;
+      }
+    }
+    console.log(md);
+    return scores;
+  }
 
   console.log(chalk.green(`  Aligned: ${aligned.length}`));
   console.log(chalk.yellow(`  Drifting: ${drifting.length}`));
@@ -804,7 +834,12 @@ program
   .option("--apply-labels", "Apply labels to GitHub")
   .option("--dry-run", "Show what would be labeled without applying")
   .option("--json", "Output results as NDJSON")
+  .option("--output <format>", "Output format: markdown")
   .action(async (opts) => {
+    if (opts.json && opts.output) {
+      console.error(chalk.red("Cannot use --json and --output together"));
+      process.exit(1);
+    }
     const ctx = await createPipelineContext(opts.repo);
     try {
       if (opts.cluster) {
@@ -844,6 +879,7 @@ program
           applyLabels: opts.applyLabels,
           dryRun: opts.dryRun,
           json: opts.json,
+          output: opts.output,
         });
       }
     } finally {
@@ -877,10 +913,15 @@ program
   .option("--apply-labels", "Apply alignment labels")
   .option("--dry-run", "Show what would be labeled")
   .option("--json", "Output results as NDJSON")
+  .option("--output <format>", "Output format: markdown")
   .action(async (opts) => {
+    if (opts.json && opts.output) {
+      console.error(chalk.red("Cannot use --json and --output together"));
+      process.exit(1);
+    }
     const ctx = await createPipelineContext(opts.repo);
     try {
-      await runVision(ctx, { doc: opts.doc, applyLabels: opts.applyLabels, dryRun: opts.dryRun, json: opts.json });
+      await runVision(ctx, { doc: opts.doc, applyLabels: opts.applyLabels, dryRun: opts.dryRun, json: opts.json, output: opts.output });
     } finally {
       ctx.store.close();
     }
@@ -956,7 +997,12 @@ program
   .option("--dry-run", "Show what would happen without applying")
   .option("-n, --top <number>", "Show top N ranked PRs", "20")
   .option("--rest", "Use REST API instead of GraphQL")
+  .option("--output <format>", "Output format: markdown")
   .action(async (opts) => {
+    if (opts.output && opts.output !== "markdown") {
+      console.error(chalk.red(`Unknown output format: ${opts.output}. Supported: markdown`));
+      process.exit(1);
+    }
     console.log(chalk.bold("🔍 pr-prism triage\n"));
     console.log(chalk.dim("Running: scan → dupes → rank → vision\n"));
 
@@ -965,13 +1011,13 @@ program
       await runScan(ctx, { useRest: opts.rest });
       console.log();
 
-      await runDupes(ctx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun });
+      await runDupes(ctx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun, output: opts.output });
       console.log();
 
       await runRank(ctx, { top: parseInt(opts.top, 10) || 20 });
       console.log();
 
-      await runVision(ctx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun });
+      await runVision(ctx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun, output: opts.output });
     } finally {
       ctx.store.close();
     }
