@@ -604,14 +604,33 @@ program
       console.log(chalk.green("  detected: OPENAI_API_KEY in environment"));
     } else {
       console.log(chalk.yellow("  no embedding provider detected"));
-      console.log(chalk.dim("  install ollama and run: ollama pull qwen3-embedding:0.6b"));
-      console.log(chalk.dim("  or set EMBEDDING_PROVIDER and EMBEDDING_API_KEY in .env"));
+      console.log();
+      console.log(chalk.bold("  zero-cost setup (recommended):"));
+      console.log("  1. get a free Jina API key at https://jina.ai");
+      console.log("  2. set EMBEDDING_PROVIDER=jina and EMBEDDING_API_KEY in .env");
+      console.log("  3. set LLM_PROVIDER=opencode (free, no key needed)");
+      console.log();
+      console.log(chalk.bold("  local setup (no API keys needed):"));
+      console.log("  1. install ollama: https://ollama.com");
+      console.log("  2. run: ollama pull qwen3-embedding:0.6b");
+      console.log("  3. set EMBEDDING_PROVIDER=ollama in .env");
+    }
+
+    // Check for GitHub token
+    const hasGithubToken = !!(process.env.GITHUB_TOKEN || process.env.GH_TOKEN);
+    if (hasGithubToken) {
+      console.log(chalk.green("\n  detected: GitHub token in environment"));
     }
 
     console.log(`\n${chalk.bold("next steps:")}`);
-    console.log("  1. Edit .env with your GitHub token");
-    console.log("  2. Edit prism.config.yaml with your repo");
-    console.log("  3. Run: prism scan");
+    if (!hasGithubToken) {
+      console.log("  1. Add your GitHub token to .env (GITHUB_TOKEN=ghp_...)");
+      console.log("  2. Edit prism.config.yaml with your target repo");
+      console.log("  3. Run: prism scan");
+    } else {
+      console.log("  1. Edit prism.config.yaml with your target repo");
+      console.log("  2. Run: prism scan");
+    }
   });
 
 // ── scan ────────────────────────────────────────────────────────
