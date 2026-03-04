@@ -73,7 +73,6 @@ async function createPipelineContext(repoOverride?: string): Promise<PipelineCon
         `use a value <= ${embedder.dimensions} or remove EMBEDDING_DIMENSIONS.`,
     );
   }
-  const nativeDims = embedder.dimensions;
   const effectiveDims = targetDims || embedder.dimensions;
 
   // Wrap embedder to truncate if needed
@@ -1314,7 +1313,7 @@ program
         for (const item of sorted) {
           const reviewSpinner = ora(`Reviewing #${item.number}...`).start();
           try {
-            let result;
+            let result: import("./types.js").ReviewResult;
             if (item.type === "pr") {
               const diff = await github.fetchDiff(item.number, store);
               result = await reviewPR(item.title, item.body, diff, {
@@ -1586,7 +1585,6 @@ for (const cmd of ["stats", "status"]) {
     .option("-r, --repo <owner/repo>", "Repository")
     .option("--json", "Output results as NDJSON")
     .action(async (opts) => {
-      const config = loadConfig();
       const env = loadEnvConfig();
       const repos = resolveRepos(opts.repo);
 

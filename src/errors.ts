@@ -12,18 +12,11 @@ export class ProviderError extends Error {
   }
 
   format(): string {
-    return [
-      chalk.red(`✗ ${this.provider}: ${this.reason}`),
-      chalk.dim(`  → ${this.remedy}`),
-    ].join("\n");
+    return [chalk.red(`✗ ${this.provider}: ${this.reason}`), chalk.dim(`  → ${this.remedy}`)].join("\n");
   }
 }
 
-export function classifyFetchError(
-  provider: string,
-  err: any,
-  opts?: { apiKeyEnvVar?: string },
-): ProviderError {
+export function classifyFetchError(provider: string, err: any, _opts?: { apiKeyEnvVar?: string }): ProviderError {
   const msg = err?.message || String(err);
   const code = err?.code || err?.cause?.code;
 
@@ -38,7 +31,11 @@ export function classifyFetchError(
     return new ProviderError(provider, `Cannot reach ${provider}`, "Check your internet connection");
   }
   if (code === "ETIMEDOUT" || code === "ESOCKETTIMEDOUT" || msg.includes("timeout")) {
-    return new ProviderError(provider, `Request to ${provider} timed out`, "Check your internet connection or try again");
+    return new ProviderError(
+      provider,
+      `Request to ${provider} timed out`,
+      "Check your internet connection or try again",
+    );
   }
 
   // Pass through ProviderErrors
@@ -89,10 +86,6 @@ export function classifyHttpError(
     case 503:
       return new ProviderError(provider, `Server error (${status})`, `${provider} may be down. Try again later`);
     default:
-      return new ProviderError(
-        provider,
-        `Returned ${status}: ${body.slice(0, 200)}`,
-        "Check your .env configuration",
-      );
+      return new ProviderError(provider, `Returned ${status}: ${body.slice(0, 200)}`, "Check your .env configuration");
   }
 }
