@@ -5,6 +5,7 @@ export { createPipelineContext, parseDuration, runDupes, runRank, runScan, runVi
 export { findDuplicateClusters } from "./cluster.js";
 export { loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 export { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
+export { ProviderError, classifyFetchError, classifyHttpError } from "./errors.js";
 export { GitHubClient } from "./github.js";
 export { buildScorerContext, rankPRs, scorePR } from "./scorer.js";
 export { cosineSimilarity, isZeroVector } from "./similarity.js";
