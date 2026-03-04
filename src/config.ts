@@ -29,8 +29,10 @@ const LabelsSchema = z.object({
 
 const ConfigSchema = z.object({
   version: z.number().optional().default(1),
-  repo: z.string(),
+  repo: z.string().optional(),
+  repos: z.array(z.string()).optional(),
   vision_doc: z.string().optional(),
+  vision_docs: z.record(z.string(), z.string()).optional(),
   thresholds: ThresholdsSchema.optional().transform((v) => ThresholdsSchema.parse(v ?? {})),
   scoring: z
     .object({ weights: ScoringWeightsSchema.optional().transform((v) => ScoringWeightsSchema.parse(v ?? {})) })
@@ -68,7 +70,25 @@ export function loadConfig(configPath?: string): PrismConfig {
       `config version ${parsed.version} requires a newer version of pr-prism. run \`npm install -g pr-prism\` to upgrade.`,
     );
   }
+  if (!parsed.repo && (!parsed.repos || parsed.repos.length === 0)) {
+    throw new Error("config must specify either `repo` or `repos` (array of owner/repo strings)");
+  }
   return parsed;
+}
+
+export function getRepos(config: PrismConfig): string[] {
+  if (config.repos && config.repos.length > 0) {
+    return config.repos;
+  }
+  if (config.repo) {
+    return [config.repo];
+  }
+  return [];
+}
+
+export function getVisionDoc(config: PrismConfig, repo: string): string | undefined {
+  if (config.vision_docs?.[repo]) return config.vision_docs[repo];
+  return config.vision_doc;
 }
 
 export function loadEnvConfig(envPath?: string): EnvConfig {

@@ -9,7 +9,7 @@ import Table from "cli-table3";
 import { Command } from "commander";
 import ora from "ora";
 import { findDuplicateClusters } from "./cluster.js";
-import { loadConfig, loadEnvConfig, parseRepo } from "./config.js";
+import { getRepos, getVisionDoc, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { applyLabelActions, ensureLabelsExist, type LabelAction } from "./labels.js";
@@ -56,7 +56,8 @@ interface PipelineContext {
 async function createPipelineContext(repoOverride?: string): Promise<PipelineContext> {
   const config = loadConfig();
   const env = loadEnvConfig();
-  const { owner, repo } = parseRepo(repoOverride || config.repo);
+  const repoStr = repoOverride || config.repo || getRepos(config)[0];
+  const { owner, repo } = parseRepo(repoStr);
   const repoFull = `${owner}/${repo}`;
   const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
   const embedder = await createEmbeddingProvider({
@@ -413,6 +414,127 @@ export async function runDupes(
   return clusters;
 }
 
+export async function runDupesMulti(
+  ctx: PipelineContext,
+  repos: string[],
+  opts: { threshold?: number; applyLabels?: boolean; dryRun?: boolean; json?: boolean; output?: string },
+) {
+  const { config, store } = ctx;
+  const threshold = opts.threshold ?? config.thresholds.duplicate_similarity;
+  const items = store.getAllItemsMulti(repos) as unknown as PRItem[];
+
+  if (items.length === 0) {
+    console.log(chalk.red("no data found. run `prism scan` first."));
+    return [];
+  }
+
+  const spinner = ora(`Clustering duplicates across ${repos.length} repos...`).start();
+  const clusters = findDuplicateClusters(store, items, { threshold, repo: repos });
+  spinner.succeed(`Found ${clusters.length} duplicate clusters across ${repos.length} repos`);
+
+  // Count cross-repo clusters
+  const crossRepoClusters = clusters.filter((c) => {
+    const clusterRepos = new Set(c.items.map((i) => i.repo));
+    return clusterRepos.size > 1;
+  });
+  if (crossRepoClusters.length > 0) {
+    console.log(chalk.cyan(`  ${crossRepoClusters.length} cross-repo clusters detected`));
+  }
+
+  if (opts.json) {
+    for (const c of clusters) {
+      console.log(
+        JSON.stringify({
+          id: c.id,
+          size: c.items.length,
+          avgSimilarity: c.avgSimilarity,
+          bestPick: { number: c.bestPick.number, repo: c.bestPick.repo },
+          theme: c.theme,
+          crossRepo: new Set(c.items.map((i) => i.repo)).size > 1,
+          items: c.items.map((i) => ({ number: i.number, repo: i.repo, type: i.type, title: i.title, score: i.score })),
+        }),
+      );
+    }
+    return clusters;
+  }
+
+  if (opts.output === "markdown") {
+    let md = `## duplicate clusters (${repos.length} repos)\n\n`;
+    md += `| # | Size | Avg Sim | Best Pick | Theme |\n`;
+    md += `|---|------|---------|-----------|-------|\n`;
+    for (const c of clusters) {
+      const theme = c.theme.replace(/\|/g, "\\|").slice(0, 60);
+      const bestLabel = `[${c.bestPick.repo}] #${c.bestPick.number}`;
+      md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | ${bestLabel} | ${theme} |\n`;
+    }
+    md += `\nTotal: ${clusters.reduce((s, c) => s + c.items.length, 0)} items across ${clusters.length} clusters\n`;
+    if (crossRepoClusters.length > 0) {
+      md += `Cross-repo clusters: ${crossRepoClusters.length}\n`;
+    }
+    console.log(md);
+    return clusters;
+  }
+
+  const table = new Table({
+    head: ["#", "Size", "Avg Sim", "Best Pick", "Theme"],
+    colWidths: [6, 6, 10, 30, 40],
+  });
+
+  for (const cluster of clusters) {
+    const bestLabel = `[${cluster.bestPick.repo}] #${cluster.bestPick.number}`;
+    table.push([
+      cluster.id,
+      cluster.items.length,
+      `${(cluster.avgSimilarity * 100).toFixed(1)}%`,
+      bestLabel,
+      cluster.theme.slice(0, 38),
+    ]);
+  }
+
+  console.log(table.toString());
+  console.log(
+    chalk.dim(`\nTotal: ${clusters.reduce((s, c) => s + c.items.length, 0)} items across ${clusters.length} clusters`),
+  );
+
+  // Labels need per-repo GitHub clients
+  if (opts.applyLabels || opts.dryRun) {
+    const env = ctx.env;
+    for (const repoStr of repos) {
+      const { owner, repo } = parseRepo(repoStr);
+      const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
+      if (opts.applyLabels) await ensureLabelsExist(github, config);
+
+      const actions: LabelAction[] = [];
+      for (const cluster of clusters) {
+        for (const item of cluster.items.filter((i) => i.repo === repoStr)) {
+          actions.push({
+            number: item.number,
+            action: "add",
+            label: config.labels.duplicate,
+            reason: `Cluster #${cluster.id} (${cluster.items.length} items)`,
+          });
+        }
+        if (cluster.bestPick.repo === repoStr) {
+          actions.push({
+            number: cluster.bestPick.number,
+            action: "add",
+            label: config.labels.top_pick,
+            reason: `Best pick in cluster #${cluster.id}`,
+          });
+        }
+      }
+
+      if (actions.length > 0) {
+        const applied = await applyLabelActions(github, actions, opts.dryRun);
+        const verb = opts.dryRun ? "Would apply" : "Applied";
+        console.log(chalk.green(`\n${verb} ${applied.length} labels on ${repoStr}`));
+      }
+    }
+  }
+
+  return clusters;
+}
+
 export async function runRank(ctx: PipelineContext, opts: { top?: number; explain?: boolean; json?: boolean }) {
   const { config, repoFull, github, store } = ctx;
   const items = store.getAllItems(repoFull) as unknown as PRItem[];
@@ -489,7 +611,7 @@ export async function runVision(
   opts: { doc?: string; applyLabels?: boolean; dryRun?: boolean; json?: boolean; output?: string },
 ) {
   const { config, env, owner, repo, repoFull, github, store } = ctx;
-  let docPath = opts.doc || config.vision_doc;
+  let docPath = opts.doc || getVisionDoc(config, repoFull);
 
   if (!docPath || !existsSync(docPath)) {
     const fetchSpinner = ora("Fetching vision document from repo...").start();
@@ -696,7 +818,7 @@ program
     // 3. GitHub token works
     if (env && config) {
       try {
-        const { owner, repo } = parseRepo(config.repo);
+        const { owner, repo } = parseRepo(getRepos(config)[0]);
         const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
         await github.fetchPRs({ maxItems: 1 });
         const rl = github.getRateLimit();
@@ -742,11 +864,15 @@ program
     if (existsSync(dbPath)) {
       try {
         const store = new VectorStore(undefined, undefined);
-        const repoFull = config ? parseRepo(config.repo).owner + "/" + parseRepo(config.repo).repo : "";
+        const firstRepo = config ? getRepos(config)[0] : "";
+        const repoFull = firstRepo ? `${parseRepo(firstRepo).owner}/${parseRepo(firstRepo).repo}` : "";
 
         if (repoFull) {
           const stats = store.getStats(repoFull);
-          pass("database", `${stats.totalItems} items (${stats.prs} PRs, ${stats.issues} issues, ${stats.diffs} diffs)`);
+          pass(
+            "database",
+            `${stats.totalItems} items (${stats.prs} PRs, ${stats.issues} issues, ${stats.diffs} diffs)`,
+          );
 
           // 7. Embedding dimensions + model match
           const storedModel = store.getMeta("embedding_model");
@@ -754,7 +880,10 @@ program
           const lastEmbed = store.getMeta("last_embed_date");
 
           if (storedModel && env && storedModel !== env.EMBEDDING_MODEL) {
-            warn("model", `DB has ${storedModel} but .env specifies ${env.EMBEDDING_MODEL}. Run \`prism re-embed\` to update`);
+            warn(
+              "model",
+              `DB has ${storedModel} but .env specifies ${env.EMBEDDING_MODEL}. Run \`prism re-embed\` to update`,
+            );
           } else if (storedModel) {
             pass("model", `${storedModel} (${storedDims} dims)`);
           }
@@ -816,11 +945,17 @@ program
   .option("--rest", "Use REST API instead of GraphQL (no deep scan signals)")
   .option("--json", "Output results as NDJSON")
   .action(async (opts) => {
-    const ctx = await createPipelineContext(opts.repo);
+    const repos = resolveRepos(opts.repo);
+    let store: VectorStore | null = null;
     try {
-      await runScan(ctx, { since: opts.since, state: opts.state, useRest: opts.rest, json: opts.json });
+      for (const r of repos) {
+        if (repos.length > 1) console.log(chalk.bold(`\n── ${r} ──`));
+        const ctx = await createPipelineContext(r);
+        store = ctx.store;
+        await runScan(ctx, { since: opts.since, state: opts.state, useRest: opts.rest, json: opts.json });
+      }
     } finally {
-      ctx.store.close();
+      store?.close();
     }
   });
 
@@ -840,14 +975,21 @@ program
       console.error(chalk.red("Cannot use --json and --output together"));
       process.exit(1);
     }
-    const ctx = await createPipelineContext(opts.repo);
+    const repos = resolveRepos(opts.repo);
+    const isMultiRepo = repos.length > 1;
+    const ctx = await createPipelineContext(repos[0]);
     try {
       if (opts.cluster) {
         // Show specific cluster detail
-        const items = ctx.store.getAllItems(ctx.repoFull) as unknown as PRItem[];
+        const items = isMultiRepo
+          ? (ctx.store.getAllItemsMulti(repos) as unknown as PRItem[])
+          : (ctx.store.getAllItems(ctx.repoFull) as unknown as PRItem[]);
         const threshold =
           opts.threshold !== undefined ? parseFloat(opts.threshold) : ctx.config.thresholds.duplicate_similarity;
-        const clusters = findDuplicateClusters(ctx.store, items, { threshold, repo: ctx.repoFull });
+        const clusters = findDuplicateClusters(ctx.store, items, {
+          threshold,
+          repo: isMultiRepo ? repos : ctx.repoFull,
+        });
         const cluster = clusters.find((c) => c.id === parseInt(opts.cluster, 10));
         if (!cluster) {
           console.log(chalk.red(`Cluster #${opts.cluster} not found.`));
@@ -868,19 +1010,30 @@ program
         for (const item of cluster.items) {
           const isBest = item.number === cluster.bestPick.number;
           const prefix = isBest ? chalk.green("★") : " ";
-          console.log(`${prefix} #${item.number} ${item.title}`);
+          const repoTag = isMultiRepo ? chalk.dim(`[${item.repo}] `) : "";
+          console.log(`${prefix} ${repoTag}#${item.number} ${item.title}`);
           console.log(
             `  Author: ${item.author} | Updated: ${item.updatedAt.slice(0, 10)} | Score: ${item.score.toFixed(2)}`,
           );
         }
       } else {
-        await runDupes(ctx, {
-          threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
-          applyLabels: opts.applyLabels,
-          dryRun: opts.dryRun,
-          json: opts.json,
-          output: opts.output,
-        });
+        if (isMultiRepo) {
+          await runDupesMulti(ctx, repos, {
+            threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
+            applyLabels: opts.applyLabels,
+            dryRun: opts.dryRun,
+            json: opts.json,
+            output: opts.output,
+          });
+        } else {
+          await runDupes(ctx, {
+            threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
+            applyLabels: opts.applyLabels,
+            dryRun: opts.dryRun,
+            json: opts.json,
+            output: opts.output,
+          });
+        }
       }
     } finally {
       ctx.store.close();
@@ -921,7 +1074,13 @@ program
     }
     const ctx = await createPipelineContext(opts.repo);
     try {
-      await runVision(ctx, { doc: opts.doc, applyLabels: opts.applyLabels, dryRun: opts.dryRun, json: opts.json, output: opts.output });
+      await runVision(ctx, {
+        doc: opts.doc,
+        applyLabels: opts.applyLabels,
+        dryRun: opts.dryRun,
+        json: opts.json,
+        output: opts.output,
+      });
     } finally {
       ctx.store.close();
     }
@@ -1003,23 +1162,47 @@ program
       console.error(chalk.red(`Unknown output format: ${opts.output}. Supported: markdown`));
       process.exit(1);
     }
+    const repos = resolveRepos(opts.repo);
+    const isMultiRepo = repos.length > 1;
     console.log(chalk.bold("🔍 pr-prism triage\n"));
-    console.log(chalk.dim("Running: scan → dupes → rank → vision\n"));
+    if (isMultiRepo) {
+      console.log(chalk.dim(`Running: scan → dupes → rank → vision across ${repos.length} repos\n`));
+    } else {
+      console.log(chalk.dim("Running: scan → dupes → rank → vision\n"));
+    }
 
-    const ctx = await createPipelineContext(opts.repo);
+    let store: VectorStore | null = null;
     try {
-      await runScan(ctx, { useRest: opts.rest });
+      // Scan all repos
+      for (const r of repos) {
+        if (isMultiRepo) console.log(chalk.bold(`\n── scan: ${r} ──`));
+        const ctx = await createPipelineContext(r);
+        store = ctx.store;
+        await runScan(ctx, { useRest: opts.rest });
+      }
       console.log();
 
-      await runDupes(ctx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun, output: opts.output });
+      // Dupes: cross-repo if multi
+      const ctx = await createPipelineContext(repos[0]);
+      store = ctx.store;
+      if (isMultiRepo) {
+        await runDupesMulti(ctx, repos, { applyLabels: opts.applyLabels, dryRun: opts.dryRun, output: opts.output });
+      } else {
+        await runDupes(ctx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun, output: opts.output });
+      }
       console.log();
 
-      await runRank(ctx, { top: parseInt(opts.top, 10) || 20 });
-      console.log();
-
-      await runVision(ctx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun, output: opts.output });
+      // Rank and vision per-repo
+      for (const r of repos) {
+        if (isMultiRepo) console.log(chalk.bold(`\n── ${r} ──`));
+        const rCtx = await createPipelineContext(r);
+        store = rCtx.store;
+        await runRank(rCtx, { top: parseInt(opts.top, 10) || 20 });
+        console.log();
+        await runVision(rCtx, { applyLabels: opts.applyLabels, dryRun: opts.dryRun, output: opts.output });
+      }
     } finally {
-      ctx.store.close();
+      store?.close();
     }
 
     console.log(chalk.bold("\n✓ Triage complete"));
@@ -1350,4 +1533,13 @@ if (isDirectRun) {
   program.parse();
 }
 
-export { program, createPipelineContext, type PipelineContext };
+function resolveRepos(repoOverride?: string): string[] {
+  if (repoOverride) return [repoOverride];
+  const config = loadConfig();
+  return getRepos(config).map((r) => {
+    const { owner, repo } = parseRepo(r);
+    return `${owner}/${repo}`;
+  });
+}
+
+export { program, createPipelineContext, resolveRepos, type PipelineContext };

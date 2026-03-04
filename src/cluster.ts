@@ -12,11 +12,12 @@ function recencyFactor(updatedAt: string): number {
 
 export interface ClusterOptions {
   threshold: number;
-  repo: string;
+  repo: string | string[];
 }
 
 export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts: ClusterOptions): Cluster[] {
-  const allEmbeddings = store.getAllEmbeddings(opts.repo);
+  const repos = Array.isArray(opts.repo) ? opts.repo : [opts.repo];
+  const allEmbeddings = repos.length === 1 ? store.getAllEmbeddings(repos[0]) : store.getAllEmbeddingsMulti(repos);
 
   // Filter out zero vectors (failed embeddings)
   const embeddings = new Map<string, Float32Array>();
@@ -34,7 +35,7 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
 
   const itemMap = new Map<string, PRItem>();
   for (const item of items) {
-    itemMap.set(`${opts.repo}:${item.type}:${item.number}`, item);
+    itemMap.set(`${item.repo}:${item.type}:${item.number}`, item);
   }
 
   const ids = [...embeddings.keys()];
