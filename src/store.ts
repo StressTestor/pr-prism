@@ -91,8 +91,23 @@ export class VectorStore {
         PRIMARY KEY (number, repo)
       );
 
+      CREATE TABLE IF NOT EXISTS reviews (
+        number INTEGER NOT NULL,
+        repo TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'pr',
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        concerns_json TEXT NOT NULL DEFAULT '[]',
+        recommendation TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        reviewed_at TEXT NOT NULL,
+        PRIMARY KEY (number, repo)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_items_repo ON items(repo);
       CREATE INDEX IF NOT EXISTS idx_items_number ON items(number, repo);
+      CREATE INDEX IF NOT EXISTS idx_reviews_repo ON reviews(repo);
     `);
 
     // Only create vec_items if we know the dimensions
@@ -344,6 +359,75 @@ export class VectorStore {
   getCachedDiff(repo: string, number: number): string | undefined {
     const row = this.db.prepare("SELECT patch_text FROM diffs WHERE repo = ? AND number = ?").get(repo, number) as any;
     return row?.patch_text;
+  }
+
+  saveReview(
+    repo: string,
+    number: number,
+    type: "pr" | "issue",
+    provider: string,
+    model: string,
+    result: { summary: string; concerns: string[]; recommendation: string; confidence: number },
+  ): void {
+    this.db
+      .prepare(`
+      INSERT INTO reviews (number, repo, type, provider, model, summary, concerns_json, recommendation, confidence, reviewed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(number, repo) DO UPDATE SET
+        type = excluded.type,
+        provider = excluded.provider,
+        model = excluded.model,
+        summary = excluded.summary,
+        concerns_json = excluded.concerns_json,
+        recommendation = excluded.recommendation,
+        confidence = excluded.confidence,
+        reviewed_at = excluded.reviewed_at
+    `)
+      .run(
+        number,
+        repo,
+        type,
+        provider,
+        model,
+        result.summary,
+        JSON.stringify(result.concerns),
+        result.recommendation,
+        result.confidence,
+        new Date().toISOString(),
+      );
+  }
+
+  getReview(
+    repo: string,
+    number: number,
+  ):
+    | {
+        number: number;
+        repo: string;
+        type: string;
+        provider: string;
+        model: string;
+        summary: string;
+        concerns: string[];
+        recommendation: string;
+        confidence: number;
+        reviewedAt: string;
+      }
+    | undefined {
+    const row = this.db.prepare("SELECT * FROM reviews WHERE repo = ? AND number = ?").get(repo, number) as any;
+    if (!row) return undefined;
+    return {
+      number: row.number,
+      repo: row.repo,
+      type: row.type,
+      provider: row.provider,
+      model: row.model,
+      summary: row.summary,
+      concerns: JSON.parse(row.concerns_json),
+      recommendation: row.recommendation,
+      confidence: row.confidence,
+      reviewedAt: row.reviewed_at,
+    };
   }
 
   getStats(repo: string): { totalItems: number; prs: number; issues: number; diffs: number } {
