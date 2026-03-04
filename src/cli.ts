@@ -103,7 +103,8 @@ export async function runScan(
 ) {
   const { config, env, repoFull, github, store } = ctx;
   const since = opts.since ? parseDuration(opts.since) : undefined;
-  const states = (opts.state || "open").split(",") as Array<"open" | "closed">;
+  const stateArg = opts.state || "open";
+  const states = (stateArg === "all" ? "open,closed" : stateArg).split(",") as Array<"open" | "closed">;
 
   const allItems: PRItem[] = [];
 
@@ -940,7 +941,11 @@ program
     let config: ReturnType<typeof loadConfig> | null = null;
     try {
       config = loadConfig();
-      pass("config", `prism.config.yaml valid (repo: ${config.repo})`);
+      const configRepos = getRepos(config);
+      pass(
+        "config",
+        `prism.config.yaml valid (${configRepos.length} repo${configRepos.length > 1 ? "s" : ""}: ${configRepos.slice(0, 3).join(", ")}${configRepos.length > 3 ? "..." : ""})`,
+      );
     } catch (e: any) {
       fail("config", e.message);
     }
@@ -968,7 +973,7 @@ program
         } else if (e.status === 403) {
           fail("github", "Token lacks required scopes. Needs `repo` for private repos, `public_repo` for public");
         } else if (e.status === 404) {
-          fail("github", `Repository ${config.repo} not found or not accessible with this token`);
+          fail("github", `Repository ${getRepos(config)[0]} not found or not accessible with this token`);
         } else {
           fail("github", e.message || "Unknown error checking GitHub token");
         }
@@ -1080,7 +1085,7 @@ program
   .description("Ingest PRs and issues into local database")
   .option("-r, --repo <owner/repo>", "Repository to scan")
   .option("-s, --since <duration>", "Only fetch items updated within duration (e.g., 7d, 2w, 1m)")
-  .option("--state <states>", "PR states to fetch (open,closed)", "open")
+  .option("--state <states>", "PR states to fetch (open, closed, all)", "open")
   .option("--rest", "Use REST API instead of GraphQL (no deep scan signals)")
   .option("--json", "Output results as NDJSON")
   .action(async (opts) => {
@@ -1517,7 +1522,8 @@ program
   .action(async (opts) => {
     const config = loadConfig();
     const env = loadEnvConfig();
-    const { owner, repo } = parseRepo(opts.repo || config.repo);
+    const repoStr = opts.repo || config.repo || getRepos(config)[0];
+    const { owner, repo } = parseRepo(repoStr);
     const repoFull = `${owner}/${repo}`;
 
     const embedder = await createEmbeddingProvider({
@@ -1572,61 +1578,86 @@ program
     store.close();
   });
 
-// ── status ──────────────────────────────────────────────────────
-program
-  .command("status")
-  .description("Show database stats and rate limit info")
-  .option("-r, --repo <owner/repo>", "Repository")
-  .option("--json", "Output results as NDJSON")
-  .action(async (opts) => {
-    const config = loadConfig();
-    const env = loadEnvConfig();
-    const { owner, repo } = parseRepo(opts.repo || config.repo);
-    const repoFull = `${owner}/${repo}`;
+// ── stats (alias: status) ────────────────────────────────────────
+for (const cmd of ["stats", "status"]) {
+  program
+    .command(cmd)
+    .description("Show database stats, embedding coverage, and provider info")
+    .option("-r, --repo <owner/repo>", "Repository")
+    .option("--json", "Output results as NDJSON")
+    .action(async (opts) => {
+      const config = loadConfig();
+      const env = loadEnvConfig();
+      const repos = resolveRepos(opts.repo);
 
-    // Open store in read-only mode — no dimension or model validation
-    const store = new VectorStore(undefined, undefined);
-    const stats = store.getStats(repoFull);
-    const embModel = store.getMeta("embedding_model") || "unknown";
-    const embDims = store.getMeta("embedding_dimensions") || "?";
+      const store = new VectorStore(undefined, undefined);
+      const embModel = store.getMeta("embedding_model") || "unknown";
+      const embDims = store.getMeta("embedding_dimensions") || "?";
+      const embProvider = store.getMeta("embedding_provider") || env.EMBEDDING_PROVIDER;
+      const configHash = store.getMeta("embedding_config_hash") || "none";
+      const lastEmbed = store.getMeta("last_embed_date");
+      const lastCheckpoint = store.getMeta("embed_checkpoint");
+      const lastTotal = store.getMeta("embed_total");
 
-    console.log(chalk.bold("pr-prism status\n"));
-    console.log(`  Repo:     ${repoFull}`);
-    console.log(`  PRs:      ${stats.prs}`);
-    console.log(`  Issues:   ${stats.issues}`);
-    console.log(`  Diffs:    ${stats.diffs} cached`);
-    console.log(`  Total:    ${stats.totalItems} items`);
-    console.log(`  Model:    ${embModel} (${embDims} dims)\n`);
+      console.log(chalk.bold("pr-prism stats\n"));
 
-    const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
-    try {
-      await github.fetchPRs({ maxItems: 1 });
-      const rl = github.getRateLimit();
-      const resetIn = Math.max(0, Math.ceil((rl.resetAt.getTime() - Date.now()) / 60000));
-      console.log(`  API:      ${rl.remaining}/${rl.limit} calls remaining (resets in ${resetIn}min)`);
-    } catch {
-      console.log(chalk.yellow("  API:      Could not check rate limit"));
-    }
+      for (const repoStr of repos) {
+        const { owner, repo } = parseRepo(repoStr);
+        const repoFull = `${owner}/${repo}`;
+        const stats = store.getStats(repoFull);
+        const embeddedCount = store.getAllEmbeddings(repoFull).size;
+        const coverage = stats.totalItems > 0 ? ((embeddedCount / stats.totalItems) * 100).toFixed(0) : "0";
 
-    if (opts.json) {
-      console.log(
-        JSON.stringify({
-          command: "status",
-          repo: repoFull,
-          ...stats,
-          embeddingModel: embModel,
-          embeddingDimensions: embDims,
-          provider: env.EMBEDDING_PROVIDER,
-          llmProvider: env.LLM_PROVIDER,
-        }),
-      );
-    } else {
-      console.log(`  Provider: ${env.EMBEDDING_PROVIDER} (${env.EMBEDDING_MODEL})`);
-      console.log(`  LLM:      ${env.LLM_PROVIDER} (${env.LLM_MODEL})`);
-    }
+        if (repos.length > 1) console.log(chalk.bold(`  ── ${repoFull} ──`));
+        console.log(`  Items:      ${stats.totalItems} (${stats.prs} PRs, ${stats.issues} issues)`);
+        console.log(`  Diffs:      ${stats.diffs} cached`);
+        console.log(`  Embeddings: ${embeddedCount}/${stats.totalItems} (${coverage}%)`);
+        if (repos.length > 1) console.log();
+      }
 
-    store.close();
-  });
+      console.log(`\n  Model:      ${embModel} (${embDims} dims)`);
+      console.log(`  Provider:   ${embProvider}`);
+      console.log(`  Config:     ${configHash}`);
+      if (lastEmbed) console.log(`  Last embed: ${lastEmbed.slice(0, 10)}`);
+      if (lastCheckpoint && lastTotal) console.log(`  Progress:   ${lastCheckpoint}/${lastTotal}`);
+      console.log(`  LLM:        ${env.LLM_PROVIDER} (${env.LLM_MODEL})`);
+
+      // API rate limit check
+      const { owner, repo } = parseRepo(repos[0]);
+      const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
+      try {
+        await github.fetchPRs({ maxItems: 1 });
+        const rl = github.getRateLimit();
+        const resetIn = Math.max(0, Math.ceil((rl.resetAt.getTime() - Date.now()) / 60000));
+        console.log(`  API:        ${rl.remaining}/${rl.limit} remaining (resets in ${resetIn}min)`);
+      } catch {
+        console.log(chalk.yellow("  API:        Could not check rate limit"));
+      }
+
+      if (opts.json) {
+        const allStats = repos.map((r) => {
+          const { owner, repo } = parseRepo(r);
+          const repoFull = `${owner}/${repo}`;
+          return { repo: repoFull, ...store.getStats(repoFull) };
+        });
+        console.log(
+          JSON.stringify({
+            command: "stats",
+            repos: allStats,
+            embeddingModel: embModel,
+            embeddingDimensions: embDims,
+            embeddingProvider: embProvider,
+            configHash,
+            lastEmbed,
+            llmProvider: env.LLM_PROVIDER,
+            llmModel: env.LLM_MODEL,
+          }),
+        );
+      }
+
+      store.close();
+    });
+}
 
 // ── report ──────────────────────────────────────────────────────
 program
