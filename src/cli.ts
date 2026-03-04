@@ -815,7 +815,17 @@ program
         const clusters = findDuplicateClusters(ctx.store, items, { threshold, repo: ctx.repoFull });
         const cluster = clusters.find((c) => c.id === parseInt(opts.cluster, 10));
         if (!cluster) {
-          console.log(chalk.red(`Cluster #${opts.cluster} not found`));
+          console.log(chalk.red(`Cluster #${opts.cluster} not found.`));
+          if (clusters.length === 0) {
+            console.log(chalk.dim("No clusters found at current threshold."));
+          } else {
+            const shown = clusters.slice(0, 20);
+            const ids = shown.map((c) => `${c.id} (${c.items.length} items)`).join(", ");
+            console.log(chalk.dim(`Available clusters: ${ids}`));
+            if (clusters.length > 20) {
+              console.log(chalk.dim(`  ... and ${clusters.length - 20} more (${clusters.length} total)`));
+            }
+          }
           return;
         }
         console.log(chalk.bold(`\nCluster #${cluster.id}: "${cluster.theme}"`));
