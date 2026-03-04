@@ -162,20 +162,33 @@ export async function runScan(
   const rl = github.getRateLimit();
   console.log(chalk.dim(`API budget: ${rl.remaining}/${rl.limit} remaining`));
 
-  // Filter unchanged
+  // Filter unchanged — also detect items with missing embeddings (crash recovery)
   const newItems: PRItem[] = [];
   let skipped = 0;
+  let recovered = 0;
   for (const item of allItems) {
     const existing = store.getByNumber(repoFull, item.number);
     if (existing && existing.updatedAt === item.updatedAt) {
-      skipped++;
+      // Check if embedding actually exists (crash recovery)
+      const hasEmbedding = store.getEmbedding(existing.id);
+      if (hasEmbedding) {
+        skipped++;
+      } else {
+        recovered++;
+        newItems.push(item);
+      }
     } else {
       newItems.push(item);
     }
   }
 
-  if (skipped > 0) {
-    console.log(chalk.dim(`Skipping ${skipped} unchanged items, embedding ${newItems.length} new/updated`));
+  if (skipped > 0 || recovered > 0) {
+    let msg = `Skipping ${skipped} unchanged items`;
+    if (recovered > 0) {
+      msg += chalk.yellow(`, resuming ${recovered} items with missing embeddings`);
+    }
+    msg += `, embedding ${newItems.length} new/updated`;
+    console.log(chalk.dim(msg));
   }
 
   // Embed and store
@@ -272,8 +285,12 @@ export async function runScan(
     }
 
     embedded += batch.length;
+    store.setMeta("embed_checkpoint", String(embedded));
+    store.setMeta("embed_total", String(newItems.length));
     embedSpinner.text = `Embedding... ${embedded}/${newItems.length}`;
   }
+
+  store.setMeta("last_embed_date", new Date().toISOString());
 
   let embedMsg = `Embedded ${newItems.length} new items (${skipped} unchanged, ${allItems.length} total)`;
   if (zeroVectors > 0) {
