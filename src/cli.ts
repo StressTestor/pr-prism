@@ -195,15 +195,22 @@ export async function runScan(
   // Embed and store
   const { embedder } = ctx;
 
-  // Store embedding metadata on first scan
-  if (!store.getMeta("embedding_model")) {
-    store.setMeta("embedding_model", env.EMBEDDING_MODEL);
-    store.setMeta("embedding_dimensions", String(embedder.dimensions));
-    if (env.EMBEDDING_DIMENSIONS) {
-      store.setMeta("embedding_dimensions_native", String(env.EMBEDDING_DIMENSIONS));
-    }
-    store.setMeta("schema_version", "1");
+  // Store/update embedding metadata on every scan
+  const configHash = `${env.EMBEDDING_PROVIDER}:${env.EMBEDDING_MODEL}:${embedder.dimensions}`;
+  const storedHash = store.getMeta("embedding_config_hash");
+  if (storedHash && storedHash !== configHash && newItems.length > 0) {
+    console.log(
+      chalk.yellow(
+        `  warning: embedding config changed (was ${storedHash}, now ${configHash}). ` +
+          "run `prism scan --reset-embeddings` or `prism reset` if results look wrong.",
+      ),
+    );
   }
+  store.setMeta("embedding_model", env.EMBEDDING_MODEL);
+  store.setMeta("embedding_dimensions", String(embedder.dimensions));
+  store.setMeta("embedding_provider", env.EMBEDDING_PROVIDER);
+  store.setMeta("embedding_config_hash", configHash);
+  store.setMeta("schema_version", "1");
 
   const embedSpinner = ora(`Embedding ${newItems.length} items...`).start();
   const BATCH_SIZE = config.batch_size || (env.EMBEDDING_PROVIDER === "ollama" ? 50 : 10);
@@ -718,9 +725,18 @@ program
       console.log(`${chalk.yellow("⊘")} prism.config.yaml already exists`);
     }
 
-    // detect available providers
-    let ollamaReady = false;
+    // Full auto-detection of available providers
     let ollamaRunning = false;
+    let ollamaEmbedModels: string[] = [];
+    let ollamaLLMModels: string[] = [];
+    const embeddingModelPrefixes = [
+      "qwen3-embedding",
+      "mxbai-embed",
+      "all-minilm",
+      "nomic-embed",
+      "snowflake-arctic-embed",
+    ];
+    const llmModelPrefixes = ["llama", "qwen", "mistral", "gemma", "phi", "deepseek"];
 
     try {
       const resp = await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(2000) });
@@ -728,44 +744,98 @@ program
         ollamaRunning = true;
         const data = (await resp.json()) as any;
         const models: string[] = (data.models || []).map((m: any) => m.name as string);
-        ollamaReady = models.some((m) => m.startsWith("qwen3-embedding"));
+        ollamaEmbedModels = models.filter((m) => embeddingModelPrefixes.some((p) => m.startsWith(p)));
+        ollamaLLMModels = models.filter((m) => llmModelPrefixes.some((p) => m.startsWith(p)));
       }
     } catch {
       /* ollama not running */
     }
 
+    // Detect API keys in environment
+    const detectedKeys: Array<{ name: string; envVar: string; provider: string }> = [];
+    const keyChecks = [
+      { envVar: "JINA_API_KEY", name: "Jina", provider: "jina" },
+      { envVar: "OPENAI_API_KEY", name: "OpenAI", provider: "openai" },
+      { envVar: "VOYAGE_API_KEY", name: "Voyage AI", provider: "voyageai" },
+      { envVar: "ANTHROPIC_API_KEY", name: "Anthropic", provider: "anthropic" },
+      { envVar: "KIMI_API_KEY", name: "Kimi", provider: "kimi" },
+    ];
+    for (const check of keyChecks) {
+      if (process.env[check.envVar]) detectedKeys.push(check);
+    }
+
     console.log(`\n${chalk.bold("provider detection:")}`);
 
-    if (ollamaReady) {
-      console.log(chalk.green("  detected: ollama with qwen3-embedding"));
-      // patch .env with ollama config
-      const envPath = resolve(process.cwd(), ".env");
-      if (existsSync(envPath)) {
-        let content = readFileSync(envPath, "utf-8");
-        content = content.replace(/^EMBEDDING_PROVIDER=.*/m, "EMBEDDING_PROVIDER=ollama");
-        content = content.replace(/^EMBEDDING_MODEL=.*/m, "EMBEDDING_MODEL=qwen3-embedding:0.6b");
-        writeFileSync(envPath, content);
-        console.log(chalk.dim("  pre-filled .env with ollama config"));
-      }
+    // Embedding provider recommendation
+    let bestEmbedding: { provider: string; model: string } | null = null;
+
+    if (ollamaEmbedModels.length > 0) {
+      const preferred = ollamaEmbedModels.find((m) => m.startsWith("qwen3-embedding")) || ollamaEmbedModels[0];
+      console.log(chalk.green(`  embedding: ollama (${ollamaEmbedModels.join(", ")})`));
+      bestEmbedding = { provider: "ollama", model: preferred };
     } else if (ollamaRunning) {
-      console.log(chalk.yellow("  ollama running but no embedding model found. run:"));
-      console.log(chalk.bold("    ollama pull qwen3-embedding:0.6b"));
-    } else if (process.env.JINA_API_KEY) {
-      console.log(chalk.green("  detected: JINA_API_KEY in environment"));
-    } else if (process.env.OPENAI_API_KEY) {
-      console.log(chalk.green("  detected: OPENAI_API_KEY in environment"));
-    } else {
-      console.log(chalk.yellow("  no embedding provider detected"));
+      console.log(chalk.yellow("  ollama running but no embedding model found"));
+      console.log(chalk.dim("    recommended: ollama pull qwen3-embedding:0.6b"));
+    }
+
+    if (detectedKeys.length > 0) {
+      for (const key of detectedKeys) {
+        console.log(chalk.green(`  detected: ${key.name} (${key.envVar})`));
+      }
+      if (!bestEmbedding) {
+        const jinaKey = detectedKeys.find((k) => k.provider === "jina");
+        const openaiKey = detectedKeys.find((k) => k.provider === "openai");
+        if (jinaKey) bestEmbedding = { provider: "jina", model: "jina-embeddings-v3" };
+        else if (openaiKey) bestEmbedding = { provider: "openai", model: "text-embedding-3-small" };
+      }
+    }
+
+    // LLM provider recommendation
+    let bestLLM: { provider: string; model: string } | null = null;
+    if (ollamaLLMModels.length > 0) {
+      console.log(
+        chalk.green(
+          `  llm: ollama (${ollamaLLMModels.slice(0, 3).join(", ")}${ollamaLLMModels.length > 3 ? "..." : ""})`,
+        ),
+      );
+      bestLLM = { provider: "ollama", model: ollamaLLMModels[0] };
+    }
+    // OpenCode Zen is always free, no key needed
+    if (!bestLLM) {
+      bestLLM = { provider: "opencode", model: "opencode/gpt-4o-mini" };
+      console.log(chalk.green("  llm: opencode zen (free, no key needed)"));
+    }
+
+    if (!bestEmbedding && detectedKeys.length === 0 && !ollamaRunning) {
+      console.log(chalk.yellow("  no providers detected"));
       console.log();
       console.log(chalk.bold("  zero-cost setup (recommended):"));
       console.log("  1. get a free Jina API key at https://jina.ai");
       console.log("  2. set EMBEDDING_PROVIDER=jina and EMBEDDING_API_KEY in .env");
-      console.log("  3. set LLM_PROVIDER=opencode (free, no key needed)");
+      console.log("  3. LLM_PROVIDER=opencode works out of the box (free)");
       console.log();
       console.log(chalk.bold("  local setup (no API keys needed):"));
       console.log("  1. install ollama: https://ollama.com");
-      console.log("  2. run: ollama pull qwen3-embedding:0.6b");
+      console.log("  2. ollama pull qwen3-embedding:0.6b");
       console.log("  3. set EMBEDDING_PROVIDER=ollama in .env");
+    }
+
+    // Auto-fill .env with best detected provider
+    if (bestEmbedding) {
+      const envPath = resolve(process.cwd(), ".env");
+      if (existsSync(envPath)) {
+        let content = readFileSync(envPath, "utf-8");
+        content = content.replace(/^EMBEDDING_PROVIDER=.*/m, `EMBEDDING_PROVIDER=${bestEmbedding.provider}`);
+        content = content.replace(/^EMBEDDING_MODEL=.*/m, `EMBEDDING_MODEL=${bestEmbedding.model}`);
+        if (bestLLM) {
+          content = content.replace(/^LLM_PROVIDER=.*/m, `LLM_PROVIDER=${bestLLM.provider}`);
+          content = content.replace(/^LLM_MODEL=.*/m, `LLM_MODEL=${bestLLM.model}`);
+        }
+        writeFileSync(envPath, content);
+        console.log(
+          chalk.dim(`\n  pre-filled .env with ${bestEmbedding.provider} + ${bestLLM?.provider || "opencode"}`),
+        );
+      }
     }
 
     // Check for GitHub token
@@ -778,10 +848,10 @@ program
     if (!hasGithubToken) {
       console.log("  1. Add your GitHub token to .env (GITHUB_TOKEN=ghp_...)");
       console.log("  2. Edit prism.config.yaml with your target repo");
-      console.log("  3. Run: prism scan");
+      console.log("  3. Run: prism doctor && prism scan");
     } else {
       console.log("  1. Edit prism.config.yaml with your target repo");
-      console.log("  2. Run: prism scan");
+      console.log("  2. Run: prism doctor && prism scan");
     }
   });
 
