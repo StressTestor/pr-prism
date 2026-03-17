@@ -10,6 +10,7 @@ export {
   createPipelineContext,
   parseDuration,
   resolveRepos,
+  runCompare,
   runDupes,
   runDupesMulti,
   runRank,

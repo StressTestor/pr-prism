@@ -9,6 +9,7 @@ import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { applyLabelActions, ensureLabelsExist, type LabelAction } from "./labels.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
+import { cosineSimilarity, isZeroVector } from "./similarity.js";
 import { VectorStore } from "./store.js";
 import type { EmbeddingProvider, PipelineContext, PRItem, StoreItem } from "./types.js";
 import { checkVisionAlignment } from "./vision.js";
@@ -753,4 +754,68 @@ export async function runVision(
   }
 
   return scores;
+}
+
+export async function runCompare(
+  ctx: PipelineContext,
+  number1: number,
+  number2: number,
+  opts: { json?: boolean },
+): Promise<{ similarity: number; item1: any; item2: any } | null> {
+  const { repoFull, store } = ctx;
+
+  const item1 = store.getByNumber(repoFull, number1);
+  const item2 = store.getByNumber(repoFull, number2);
+
+  if (!item1) {
+    console.log(chalk.red(`#${number1} not found in database. Run \`prism scan\` first.`));
+    return null;
+  }
+  if (!item2) {
+    console.log(chalk.red(`#${number2} not found in database. Run \`prism scan\` first.`));
+    return null;
+  }
+
+  const emb1 = store.getEmbedding(item1.id);
+  const emb2 = store.getEmbedding(item2.id);
+
+  if (!emb1 || !emb2) {
+    console.log(chalk.red("One or both items have no embeddings. Run `prism scan` first."));
+    return null;
+  }
+
+  if (isZeroVector(emb1) || isZeroVector(emb2)) {
+    console.log(chalk.yellow("One or both items have zero-vector embeddings (failed embedding). Cannot compare."));
+    return null;
+  }
+
+  const similarity = cosineSimilarity(emb1, emb2);
+
+  if (opts.json) {
+    console.log(JSON.stringify({
+      command: "compare",
+      similarity,
+      item1: { number: number1, type: item1.type, title: item1.title },
+      item2: { number: number2, type: item2.type, title: item2.title },
+    }));
+  } else {
+    console.log(chalk.bold(`\nComparing #${number1} vs #${number2}\n`));
+    console.log(`  #${number1}: ${item1.title}`);
+    console.log(`  #${number2}: ${item2.title}`);
+    console.log();
+
+    const simPct = (similarity * 100).toFixed(1);
+    const color = similarity >= 0.85 ? chalk.red : similarity >= 0.65 ? chalk.yellow : chalk.green;
+    console.log(`  Similarity: ${color(simPct + "%")}`);
+
+    if (similarity >= 0.85) {
+      console.log(chalk.red("  → Likely duplicates"));
+    } else if (similarity >= 0.65) {
+      console.log(chalk.yellow("  → Related but distinct"));
+    } else {
+      console.log(chalk.green("  → Unrelated"));
+    }
+  }
+
+  return { similarity, item1, item2 };
 }

@@ -14,6 +14,7 @@ import { GitHubClient } from "./github.js";
 import {
   createPipelineContext,
   resolveRepos,
+  runCompare,
   runDupes,
   runDupesMulti,
   runRank,
@@ -747,6 +748,21 @@ program
     }
 
     console.log(chalk.bold("\n✓ Triage complete"));
+  });
+
+// ── compare ─────────────────────────────────────────────────────
+program
+  .command("compare <number1> <number2>")
+  .description("Compare two PRs/issues for similarity")
+  .option("-r, --repo <owner/repo>", "Repository")
+  .option("--json", "Output as JSON")
+  .action(async (n1: string, n2: string, opts) => {
+    const ctx = await createPipelineContext(opts.repo);
+    try {
+      await runCompare(ctx, parseInt(n1, 10), parseInt(n2, 10), { json: opts.json });
+    } finally {
+      ctx.store.close();
+    }
   });
 
 // ── reset ───────────────────────────────────────────────────────
