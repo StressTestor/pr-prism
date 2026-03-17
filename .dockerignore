@@ -1,0 +1,12 @@
+node_modules
+dist
+data
+.git
+.env
+*.db
+*.db-wal
+*.db-shm
+docs
+scripts
+examples
+PR_PRISM_AUDIT.md
