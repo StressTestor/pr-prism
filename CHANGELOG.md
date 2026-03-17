@@ -2,6 +2,33 @@
 
 all notable changes to pr-prism are documented here.
 
+## [1.1.0] — 2026-03-17
+
+### added
+- `prism compare <n1> <n2>` command for pairwise similarity checking between any two PRs/issues
+- GitHub Action (`action/action.yml`) for automated PR triage on pull_request and schedule events, posts duplicate warnings as PR comments
+- Dockerfile for containerized usage
+- author merge count cache in SQLite (24hr TTL) so repeat rank/triage runs skip GitHub API calls for known authors
+- pipeline.ts module with extracted pipeline functions for programmatic use, enables Action and future integrations
+- error tests for ProviderError, classifyFetchError, classifyHttpError (16 tests)
+- reviewer tests for JSON parsing, empty responses, API errors, Zod validation, diff truncation (5 tests)
+- pipeline tests for parseDuration and export verification (5 tests)
+
+### fixed
+- embedding API response validation: malformed responses now throw actionable ProviderErrors instead of crashing with TypeError
+- LLM reviewer handles empty/refusal responses gracefully instead of crashing on `choices[0]`
+- SQLite busy_timeout set to 5s so concurrent runs wait instead of crashing with SQLITE_BUSY
+- Zod validation errors formatted as human-readable `path: message` lines (was raw Zod output)
+- YAML parse errors caught and formatted (was raw stack trace)
+- scoring DRY violation: cluster.ts now uses shared normalize functions from scorer.ts instead of inline reimplementations
+- npm audit vulnerability resolved (rollup dev dep)
+
+### changed
+- pipeline functions moved from cli.ts to pipeline.ts (cli.ts is now a thin wrapper over commander commands)
+- PipelineContext interface moved to types.ts
+- normalizeDescriptionQuality and normalizeDiffSize exported from scorer.ts
+- buildScorerContext accepts optional store/repo params for cache integration
+
 ## [1.0.0] — 2026-03-04
 
 ### added
