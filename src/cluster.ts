@@ -1,3 +1,4 @@
+import { normalizeDescriptionQuality, normalizeDiffSize } from "./scorer.js";
 import { cosineSimilarity, isZeroVector } from "./similarity.js";
 import type { VectorStore } from "./store.js";
 import type { Cluster, PRItem, ScoredPR, ScoreSignals } from "./types.js";
@@ -109,19 +110,10 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
         const recency = recencyFactor(item.updatedAt);
         const hasTests = item.hasTests === true ? 1.0 : item.hasTests === false ? 0.0 : 0.5;
         const ciPassing = item.ciStatus === "success" ? 1 : item.ciStatus === "failure" ? 0 : 0.5;
-        const descQuality = Math.min(1, (item.body?.length || 0) / 500);
+        const descQuality = normalizeDescriptionQuality(item.body || "", (item.body || "").length);
         const reviewApprovals = Math.min(1.0, (item.reviewCount || 0) / 3);
         const hasDiff = item.additions != null && item.deletions != null;
-        const diffTotal = (item.additions || 0) + (item.deletions || 0);
-        const diffSize = hasDiff
-          ? diffTotal <= 50
-            ? 1.0
-            : diffTotal <= 200
-              ? 0.8
-              : diffTotal <= 500
-                ? 0.6
-                : 0.4
-          : 0.5;
+        const diffSize = hasDiff ? normalizeDiffSize(item.additions || 0, item.deletions || 0) : 0.5;
         const signals: ScoreSignals = {
           hasTests,
           ciPassing,
