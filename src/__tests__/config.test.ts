@@ -1,5 +1,8 @@
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { parseRepo } from "../config.js";
+import { loadConfig, parseRepo } from "../config.js";
 
 describe("parseRepo", () => {
   it("parses valid owner/repo", () => {
@@ -32,5 +35,15 @@ describe("parseRepo", () => {
 
   it("rejects extra path segments", () => {
     expect(() => parseRepo("octocat/hello/world")).toThrow("invalid repo format");
+  });
+});
+
+describe("loadConfig", () => {
+  it("throws formatted error for invalid YAML", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "prism-test-"));
+    const configPath = join(tmpDir, "prism.config.yaml");
+    writeFileSync(configPath, "invalid: yaml: [broken");
+    expect(() => loadConfig(configPath)).toThrow("failed to parse");
+    rmSync(tmpDir, { recursive: true });
   });
 });

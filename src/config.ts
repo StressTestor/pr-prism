@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { config as loadEnv } from "dotenv";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { formatZodError } from "./errors.js";
 
 const ScoringWeightsSchema = z.object({
   has_tests: z.number().default(0.25),
@@ -63,8 +64,21 @@ export function loadConfig(configPath?: string): PrismConfig {
   if (!existsSync(p)) {
     throw new Error(`config not found at ${p}. run \`prism init\` or pass \`--repo owner/name\``);
   }
-  const raw = parseYaml(readFileSync(p, "utf-8"));
-  const parsed = ConfigSchema.parse(raw);
+  let raw: any;
+  try {
+    raw = parseYaml(readFileSync(p, "utf-8"));
+  } catch (e: any) {
+    throw new Error(`failed to parse ${p}: ${e.message || "invalid YAML syntax"}`);
+  }
+  let parsed: PrismConfig;
+  try {
+    parsed = ConfigSchema.parse(raw);
+  } catch (e: any) {
+    if (e?.issues) {
+      throw new Error(`invalid config at ${p}:\n${formatZodError(e)}`);
+    }
+    throw e;
+  }
   if (parsed.version !== 1) {
     throw new Error(
       `config version ${parsed.version} requires a newer version of pr-prism. run \`npm install -g pr-prism\` to upgrade.`,
@@ -93,7 +107,14 @@ export function getVisionDoc(config: PrismConfig, repo: string): string | undefi
 
 export function loadEnvConfig(envPath?: string): EnvConfig {
   loadEnv({ path: envPath || resolve(process.cwd(), ".env") });
-  return EnvSchema.parse(process.env);
+  try {
+    return EnvSchema.parse(process.env);
+  } catch (e: any) {
+    if (e?.issues) {
+      throw new Error(`invalid environment config:\n${formatZodError(e)}\n\ncheck your .env file or run \`prism init\``);
+    }
+    throw e;
+  }
 }
 
 export function parseRepo(repo: string): { owner: string; repo: string } {

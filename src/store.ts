@@ -13,6 +13,7 @@ export class VectorStore {
     const p = dbPath || resolve(process.cwd(), "data", "prism.db");
     mkdirSync(resolve(p, ".."), { recursive: true });
     this.db = new Database(p);
+    this.db.pragma("busy_timeout = 5000");
     this.dimensions = dimensions ?? 0;
     this.embeddingModel = embeddingModel;
     this.init();
