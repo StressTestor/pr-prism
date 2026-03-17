@@ -205,7 +205,9 @@ Analyze this PR and respond with JSON only.`;
   let result: unknown;
   try {
     result = await llm.completeJSON(prompt, REVIEW_SYSTEM_PROMPT);
-  } catch {
+  } catch (err: any) {
+    // Only fall back for JSON parse errors, not network/auth/rate limit errors
+    if (err instanceof ProviderError) throw err;
     // Fallback: try plain completion and parse
     const text = await llm.complete(prompt, REVIEW_SYSTEM_PROMPT);
     const si = text.indexOf("{");

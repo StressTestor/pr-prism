@@ -310,6 +310,16 @@ export class VectorStore {
         metadata,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+        author: metadata.author,
+        state: metadata.state,
+        labels: metadata.labels,
+        additions: metadata.additions,
+        deletions: metadata.deletions,
+        changedFiles: metadata.changedFiles,
+        ciStatus: metadata.ciStatus,
+        reviewCount: metadata.reviewCount,
+        hasTests: metadata.hasTests,
+        body: row.body_snippet,
       } as StoreItem;
     });
   }
