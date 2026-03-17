@@ -85,3 +85,23 @@ export interface StoreItem {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface PipelineContext {
+  config: import("./config.js").PrismConfig;
+  env: {
+    GITHUB_TOKEN: string;
+    EMBEDDING_PROVIDER: string;
+    EMBEDDING_API_KEY?: string;
+    EMBEDDING_MODEL: string;
+    EMBEDDING_DIMENSIONS?: number;
+    LLM_PROVIDER: string;
+    LLM_API_KEY?: string;
+    LLM_MODEL: string;
+  };
+  owner: string;
+  repo: string;
+  repoFull: string;
+  github: import("./github.js").GitHubClient;
+  store: import("./store.js").VectorStore;
+  embedder: EmbeddingProvider;
+}
