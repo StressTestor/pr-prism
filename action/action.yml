@@ -1,0 +1,114 @@
+name: "PR Prism Triage"
+description: "Find duplicate PRs, rank quality, check vision alignment"
+author: "StressTestor"
+
+inputs:
+  github-token:
+    description: "GitHub token for API access"
+    required: true
+    default: "${{ github.token }}"
+  embedding-provider:
+    description: "Embedding provider (jina, openai, ollama)"
+    required: false
+    default: "jina"
+  embedding-api-key:
+    description: "API key for embedding provider"
+    required: false
+  embedding-model:
+    description: "Embedding model name"
+    required: false
+    default: "jina-embeddings-v3"
+  similarity-threshold:
+    description: "Duplicate similarity threshold (0-1)"
+    required: false
+    default: "0.85"
+  comment-on-pr:
+    description: "Post a comment on PRs with triage results"
+    required: false
+    default: "true"
+
+outputs:
+  cluster-count:
+    description: "Number of duplicate clusters found"
+    value: ${{ steps.dupes.outputs.cluster-count }}
+  duplicate-percentage:
+    description: "Percentage of items in duplicate clusters"
+    value: ${{ steps.dupes.outputs.duplicate-percentage }}
+  total-items:
+    description: "Total items scanned"
+    value: ${{ steps.scan.outputs.total-items }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install pr-prism
+      shell: bash
+      run: npm install -g pr-prism
+
+    - name: Create config
+      shell: bash
+      run: |
+        cat > prism.config.yaml << 'YAML'
+        version: 1
+        repo: ${{ github.repository }}
+        YAML
+
+    - name: Create .env
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        EMBEDDING_PROVIDER: ${{ inputs.embedding-provider }}
+        EMBEDDING_API_KEY: ${{ inputs.embedding-api-key }}
+        EMBEDDING_MODEL: ${{ inputs.embedding-model }}
+      run: |
+        {
+          echo "GITHUB_TOKEN=${GITHUB_TOKEN}"
+          echo "EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER}"
+          echo "EMBEDDING_MODEL=${EMBEDDING_MODEL}"
+          if [ -n "${EMBEDDING_API_KEY}" ]; then
+            echo "EMBEDDING_API_KEY=${EMBEDDING_API_KEY}"
+          fi
+          echo "LLM_PROVIDER=opencode"
+          echo "LLM_MODEL=opencode/gpt-4o-mini"
+        } > .env
+
+    - name: Scan repository
+      id: scan
+      shell: bash
+      run: |
+        prism scan --repo "${{ github.repository }}" --json 2>&1 | tee /tmp/prism-scan.log
+        # extract total from last JSON line
+        total=$(grep -o '"totalItems":[0-9]*' /tmp/prism-scan.log | tail -1 | cut -d: -f2)
+        if [ -z "$total" ]; then
+          total=$(grep -o '"total":[0-9]*' /tmp/prism-scan.log | tail -1 | cut -d: -f2)
+        fi
+        echo "total-items=${total:-0}" >> "$GITHUB_OUTPUT"
+
+    - name: Find duplicates
+      id: dupes
+      shell: bash
+      run: |
+        prism dupes --repo "${{ github.repository }}" --threshold "${{ inputs.similarity-threshold }}" --json 2>&1 | tee /tmp/prism-dupes.json
+        # parse cluster output
+        cluster_count=$(grep -c '"id":' /tmp/prism-dupes.json || echo "0")
+        total_items=${{ steps.scan.outputs.total-items }}
+        dupe_items=$(grep -o '"size":[0-9]*' /tmp/prism-dupes.json | cut -d: -f2 | paste -sd+ | bc 2>/dev/null || echo "0")
+        if [ "$total_items" -gt 0 ] 2>/dev/null; then
+          pct=$(echo "scale=1; $dupe_items * 100 / $total_items" | bc 2>/dev/null || echo "0")
+        else
+          pct="0"
+        fi
+        echo "cluster-count=${cluster_count}" >> "$GITHUB_OUTPUT"
+        echo "duplicate-percentage=${pct}" >> "$GITHUB_OUTPUT"
+        echo "Found ${cluster_count} clusters (${pct}% of ${total_items} items)"
+
+    - name: Post PR comment
+      if: inputs.comment-on-pr == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        TOTAL_ITEMS: ${{ steps.scan.outputs.total-items }}
+        DUPE_PCT: ${{ steps.dupes.outputs.duplicate-percentage }}
+      run: node "${{ github.action_path }}/dist/comment.js"

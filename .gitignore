@@ -1,5 +1,6 @@
 node_modules/
 dist/
+!action/dist/
 data/*
 !data/.gitkeep
 .env
