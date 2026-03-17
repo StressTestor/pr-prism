@@ -111,7 +111,9 @@ export function loadEnvConfig(envPath?: string): EnvConfig {
     return EnvSchema.parse(process.env);
   } catch (e: any) {
     if (e?.issues) {
-      throw new Error(`invalid environment config:\n${formatZodError(e)}\n\ncheck your .env file or run \`prism init\``);
+      throw new Error(
+        `invalid environment config:\n${formatZodError(e)}\n\ncheck your .env file or run \`prism init\``,
+      );
     }
     throw e;
   }
