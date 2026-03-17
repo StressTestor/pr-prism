@@ -1,4 +1,4 @@
-import { ProviderError, classifyFetchError, classifyHttpError } from "./errors.js";
+import { classifyFetchError, classifyHttpError, ProviderError } from "./errors.js";
 import type { EmbeddingProvider } from "./types.js";
 
 interface ProviderConfig {

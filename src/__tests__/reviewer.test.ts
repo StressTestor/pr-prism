@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderError } from "../errors.js";
 
 // We need to test reviewPR which internally creates an LLM and calls fetch.
@@ -58,9 +58,7 @@ describe("reviewPR", () => {
     });
 
     const { reviewPR } = await import("../reviewer.js");
-    await expect(
-      reviewPR("Fix bug", "Description", "diff", DEFAULT_CONFIG),
-    ).rejects.toThrow(ProviderError);
+    await expect(reviewPR("Fix bug", "Description", "diff", DEFAULT_CONFIG)).rejects.toThrow(ProviderError);
   });
 
   it("handles API error with ProviderError", async () => {
@@ -72,9 +70,7 @@ describe("reviewPR", () => {
     });
 
     const { reviewPR } = await import("../reviewer.js");
-    await expect(
-      reviewPR("Fix bug", "Description", "diff", DEFAULT_CONFIG),
-    ).rejects.toThrow(/Invalid API key/);
+    await expect(reviewPR("Fix bug", "Description", "diff", DEFAULT_CONFIG)).rejects.toThrow(/Invalid API key/);
   });
 
   it("validates response against zod schema", async () => {
@@ -98,9 +94,7 @@ describe("reviewPR", () => {
     });
 
     const { reviewPR } = await import("../reviewer.js");
-    await expect(
-      reviewPR("Fix bug", "Description", "diff", DEFAULT_CONFIG),
-    ).rejects.toThrow();
+    await expect(reviewPR("Fix bug", "Description", "diff", DEFAULT_CONFIG)).rejects.toThrow();
   });
 
   it("truncates diff longer than 50KB", async () => {

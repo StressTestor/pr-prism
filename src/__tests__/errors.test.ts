@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ProviderError, classifyFetchError, classifyHttpError } from "../errors.js";
+import { classifyFetchError, classifyHttpError, ProviderError } from "../errors.js";
 
 describe("ProviderError", () => {
   it("formats message with provider and reason", () => {

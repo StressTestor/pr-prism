@@ -792,12 +792,14 @@ export async function runCompare(
   const similarity = cosineSimilarity(emb1, emb2);
 
   if (opts.json) {
-    console.log(JSON.stringify({
-      command: "compare",
-      similarity,
-      item1: { number: number1, type: item1.type, title: item1.title },
-      item2: { number: number2, type: item2.type, title: item2.title },
-    }));
+    console.log(
+      JSON.stringify({
+        command: "compare",
+        similarity,
+        item1: { number: number1, type: item1.type, title: item1.title },
+        item2: { number: number2, type: item2.type, title: item2.title },
+      }),
+    );
   } else {
     console.log(chalk.bold(`\nComparing #${number1} vs #${number2}\n`));
     console.log(`  #${number1}: ${item1.title}`);
@@ -806,7 +808,7 @@ export async function runCompare(
 
     const simPct = (similarity * 100).toFixed(1);
     const color = similarity >= 0.85 ? chalk.red : similarity >= 0.65 ? chalk.yellow : chalk.green;
-    console.log(`  Similarity: ${color(simPct + "%")}`);
+    console.log(`  Similarity: ${color(`${simPct}%`)}`);
 
     if (similarity >= 0.85) {
       console.log(chalk.red("  → Likely duplicates"));
