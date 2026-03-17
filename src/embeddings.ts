@@ -1,4 +1,4 @@
-import { classifyFetchError, classifyHttpError } from "./errors.js";
+import { ProviderError, classifyFetchError, classifyHttpError } from "./errors.js";
 import type { EmbeddingProvider } from "./types.js";
 
 interface ProviderConfig {
@@ -45,6 +45,13 @@ class OpenAIEmbeddings implements EmbeddingProvider {
       throw classifyHttpError("OpenAI Embeddings", resp.status, body, { apiKeyEnvVar: "EMBEDDING_API_KEY" });
     }
     const data = (await resp.json()) as any;
+    if (!data.data || !Array.isArray(data.data)) {
+      throw new ProviderError(
+        "OpenAI Embeddings",
+        "Unexpected response format (missing data array)",
+        "Check the API base URL and model name are correct",
+      );
+    }
     return data.data.map((d: any) => d.embedding);
   }
 }
@@ -107,6 +114,13 @@ class OllamaEmbeddings implements EmbeddingProvider {
       throw classifyHttpError("Ollama", resp.status, body);
     }
     const data = (await resp.json()) as any;
+    if (!data.embeddings || !Array.isArray(data.embeddings)) {
+      throw new ProviderError(
+        "Ollama",
+        "Unexpected response format (missing embeddings array)",
+        "Check that Ollama is up to date and the model supports embeddings",
+      );
+    }
     if (!this.initialized) {
       this.dimensions = data.embeddings[0].length;
       this.initialized = true;
@@ -145,6 +159,13 @@ class VoyageEmbeddings implements EmbeddingProvider {
       throw classifyHttpError("VoyageAI", resp.status, body, { apiKeyEnvVar: "EMBEDDING_API_KEY" });
     }
     const data = (await resp.json()) as any;
+    if (!data.data || !Array.isArray(data.data)) {
+      throw new ProviderError(
+        "VoyageAI",
+        "Unexpected response format (missing data array)",
+        "Check the API key and model name are correct",
+      );
+    }
     this.dimensions = data.data[0].embedding.length;
     return data.data.map((d: any) => d.embedding);
   }
