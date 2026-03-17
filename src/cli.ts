@@ -719,12 +719,14 @@ program
       for (const r of repos) {
         if (isMultiRepo) console.log(chalk.bold(`\n── scan: ${r} ──`));
         const ctx = await createPipelineContext(r);
+        store?.close();
         store = ctx.store;
         await runScan(ctx, { useRest: opts.rest });
       }
       console.log();
 
       // Dupes: cross-repo if multi
+      store?.close();
       const ctx = await createPipelineContext(repos[0]);
       store = ctx.store;
       if (isMultiRepo) {
@@ -737,6 +739,7 @@ program
       // Rank and vision per-repo
       for (const r of repos) {
         if (isMultiRepo) console.log(chalk.bold(`\n── ${r} ──`));
+        store?.close();
         const rCtx = await createPipelineContext(r);
         store = rCtx.store;
         await runRank(rCtx, { top: parseInt(opts.top, 10) || 20 });
@@ -971,7 +974,7 @@ program
     const dupeItemCount = clusters.reduce((s, c) => s + c.items.length, 0);
 
     spinner.text = "Building scorer context...";
-    const context = await buildScorerContext(items, github);
+    const context = await buildScorerContext(items, github, store, repoFull);
     const ranked = rankPRs(items, config, context);
 
     let visionResults: { aligned: number; drifting: number; offVision: number } | null = null;

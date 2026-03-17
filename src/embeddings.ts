@@ -32,14 +32,19 @@ class OpenAIEmbeddings implements EmbeddingProvider {
       if (!t || typeof t !== "string") return " ";
       return t.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim() || " ";
     });
-    const resp = await fetch(`${this.baseUrl}/embeddings`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({ input: sanitized, model: this.model }),
-    });
+    let resp: Response;
+    try {
+      resp = await fetch(`${this.baseUrl}/embeddings`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({ input: sanitized, model: this.model }),
+      });
+    } catch (err: any) {
+      throw classifyFetchError("OpenAI Embeddings", err, { apiKeyEnvVar: "EMBEDDING_API_KEY" });
+    }
     if (!resp.ok) {
       const body = await resp.text();
       throw classifyHttpError("OpenAI Embeddings", resp.status, body, { apiKeyEnvVar: "EMBEDDING_API_KEY" });
@@ -146,14 +151,19 @@ class VoyageEmbeddings implements EmbeddingProvider {
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    const resp = await fetch("https://api.voyageai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({ input: texts, model: this.model }),
-    });
+    let resp: Response;
+    try {
+      resp = await fetch("https://api.voyageai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({ input: texts, model: this.model }),
+      });
+    } catch (err: any) {
+      throw classifyFetchError("VoyageAI", err, { apiKeyEnvVar: "EMBEDDING_API_KEY" });
+    }
     if (!resp.ok) {
       const body = await resp.text();
       throw classifyHttpError("VoyageAI", resp.status, body, { apiKeyEnvVar: "EMBEDDING_API_KEY" });
@@ -166,7 +176,9 @@ class VoyageEmbeddings implements EmbeddingProvider {
         "Check the API key and model name are correct",
       );
     }
-    this.dimensions = data.data[0].embedding.length;
+    if (this.dimensions === 0 || this.dimensions === 1024) {
+      this.dimensions = data.data[0].embedding.length;
+    }
     return data.data.map((d: any) => d.embedding);
   }
 }
