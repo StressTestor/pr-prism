@@ -44,6 +44,21 @@ export function classifyFetchError(provider: string, err: any, _opts?: { apiKeyE
   return new ProviderError(provider, msg, "Check your configuration and try again");
 }
 
+export function formatZodError(error: unknown): string {
+  if (error && typeof error === "object" && "issues" in error) {
+    const issues = (error as any).issues;
+    if (Array.isArray(issues)) {
+      return issues
+        .map((i: any) => {
+          const path = i.path?.join(".") || "root";
+          return `  ${path}: ${i.message}`;
+        })
+        .join("\n");
+    }
+  }
+  return String(error);
+}
+
 export function classifyHttpError(
   provider: string,
   status: number,
