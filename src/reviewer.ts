@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { classifyHttpError } from "./errors.js";
+import { classifyHttpError, ProviderError } from "./errors.js";
 import type { LLMProvider, ReviewResult } from "./types.js";
 
 const ReviewResultSchema = z.object({
@@ -45,6 +45,9 @@ class OpenAILLM implements LLMProvider {
       throw classifyHttpError("LLM", resp.status, body, { apiKeyEnvVar: "LLM_API_KEY" });
     }
     const data = (await resp.json()) as any;
+    if (!data.choices?.length) {
+      throw new ProviderError("LLM", "Empty response from model (no choices returned)", "The model may be overloaded or refusing to respond. Try again or use a different model");
+    }
     return data.choices[0].message.content;
   }
 
@@ -71,6 +74,9 @@ class OpenAILLM implements LLMProvider {
       throw classifyHttpError("LLM", resp.status, body, { apiKeyEnvVar: "LLM_API_KEY" });
     }
     const data = (await resp.json()) as any;
+    if (!data.choices?.length) {
+      throw new ProviderError("LLM", "Empty response from model (no choices returned)", "The model may be overloaded or refusing to respond. Try again or use a different model");
+    }
     return JSON.parse(data.choices[0].message.content);
   }
 }
@@ -124,6 +130,9 @@ class AnthropicLLM implements LLMProvider {
       throw classifyHttpError("Anthropic", resp.status, body, { apiKeyEnvVar: "LLM_API_KEY" });
     }
     const data = (await resp.json()) as any;
+    if (!data.content?.length) {
+      throw new ProviderError("Anthropic", "Empty response from model (no content returned)", "The model may be overloaded or refusing to respond. Try again or use a different model");
+    }
     return data.content[0].text;
   }
 
