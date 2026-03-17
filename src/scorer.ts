@@ -6,7 +6,7 @@ interface ScorerContext {
   authorMergeCounts: Map<string, number>;
 }
 
-function normalizeDescriptionQuality(body: string, bodyLength?: number): number {
+export function normalizeDescriptionQuality(body: string, bodyLength?: number): number {
   if (!body) return 0;
   const len = bodyLength ?? body.length;
   if (len < 50) return 0.1;
@@ -15,7 +15,7 @@ function normalizeDescriptionQuality(body: string, bodyLength?: number): number 
   return 0.9 + Math.min(0.1, ((len - 1000) / 5000) * 0.1);
 }
 
-function normalizeDiffSize(additions: number, deletions: number): number {
+export function normalizeDiffSize(additions: number, deletions: number): number {
   const total = additions + deletions;
   if (total <= 50) return 1.0;
   if (total <= 200) return 0.8;
