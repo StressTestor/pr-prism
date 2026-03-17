@@ -60,6 +60,7 @@ triage ─ run everything in one shot
 | `prism doctor` | check config, providers, db health |
 | `prism init` | auto-detect providers, generate config |
 | `prism re-embed` | re-embed with current provider (no github fetch) |
+| `prism compare <n1> <n2>` | compare two PRs/issues for similarity |
 | `prism reset` | wipe database and start fresh |
 
 ## flags
@@ -77,6 +78,7 @@ prism review 42 --type issue        # review an issue
 prism review --show 42              # show saved review
 prism triage --output markdown      # markdown output for github issues
 prism dupes --json | jq '.bestPick' # machine-readable NDJSON
+prism compare 42 99          # check similarity between two items
 ```
 
 ## zero cost setup
@@ -142,6 +144,40 @@ prism dupes --dry-run           # preview first
 ```
 
 read-only by default. always.
+
+## github action
+
+run pr-prism automatically on every PR:
+
+```yaml
+# .github/workflows/prism-triage.yml
+name: PR Triage
+on:
+  pull_request:
+    types: [opened, reopened]
+  schedule:
+    - cron: '0 0 * * 1'  # weekly full scan
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: StressTestor/pr-prism@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          embedding-provider: jina
+          embedding-api-key: ${{ secrets.JINA_API_KEY }}
+```
+
+on pull_request events, prism checks if the new PR is a duplicate and comments with matches. on schedule, it does a full triage scan.
+
+## docker
+
+```bash
+docker build -t pr-prism .
+docker run --rm -v $(pwd):/work -w /work --env-file .env pr-prism triage
+```
 
 ## how dupe detection works
 
