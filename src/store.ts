@@ -109,6 +109,14 @@ export class VectorStore {
       CREATE INDEX IF NOT EXISTS idx_items_repo ON items(repo);
       CREATE INDEX IF NOT EXISTS idx_items_number ON items(number, repo);
       CREATE INDEX IF NOT EXISTS idx_reviews_repo ON reviews(repo);
+
+      CREATE TABLE IF NOT EXISTS author_cache (
+        author TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        merge_count INTEGER NOT NULL,
+        cached_at TEXT NOT NULL,
+        PRIMARY KEY (author, repo)
+      );
     `);
 
     // Only create vec_items if we know the dimensions
@@ -439,6 +447,28 @@ export class VectorStore {
     ).c;
     const diffs = (this.db.prepare("SELECT COUNT(*) as c FROM diffs WHERE repo = ?").get(repo) as any).c;
     return { totalItems: total, prs, issues, diffs };
+  }
+
+  getCachedAuthorMergeCount(repo: string, author: string, maxAgeHours = 24): number | undefined {
+    const row = this.db
+      .prepare("SELECT merge_count, cached_at FROM author_cache WHERE repo = ? AND author = ?")
+      .get(repo, author) as any;
+    if (!row) return undefined;
+    const ageMs = Date.now() - new Date(row.cached_at).getTime();
+    if (ageMs > maxAgeHours * 60 * 60 * 1000) return undefined;
+    return row.merge_count;
+  }
+
+  cacheAuthorMergeCount(repo: string, author: string, mergeCount: number): void {
+    this.db
+      .prepare(`
+        INSERT INTO author_cache (author, repo, merge_count, cached_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(author, repo) DO UPDATE SET
+          merge_count = excluded.merge_count,
+          cached_at = excluded.cached_at
+      `)
+      .run(author, repo, mergeCount, new Date().toISOString());
   }
 
   close(): void {

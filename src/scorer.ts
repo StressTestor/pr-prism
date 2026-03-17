@@ -32,7 +32,12 @@ function normalizeAuthorHistory(mergeCount: number): number {
   return Math.min(1.0, 0.7 + (mergeCount - 20) * 0.005);
 }
 
-export async function buildScorerContext(items: PRItem[], github: GitHubClient): Promise<ScorerContext> {
+export async function buildScorerContext(
+  items: PRItem[],
+  github: GitHubClient,
+  store?: import("./store.js").VectorStore,
+  repo?: string,
+): Promise<ScorerContext> {
   const authorMergeCounts = new Map<string, number>();
 
   const authorFreq = new Map<string, number>();
@@ -48,8 +53,18 @@ export async function buildScorerContext(items: PRItem[], github: GitHubClient):
     .map(([author]) => author);
 
   for (const author of topAuthors) {
+    if (store && repo) {
+      const cached = store.getCachedAuthorMergeCount(repo, author);
+      if (cached !== undefined) {
+        authorMergeCounts.set(author, cached);
+        continue;
+      }
+    }
     const count = await github.getAuthorMergeCountGraphQL(author);
     authorMergeCounts.set(author, count);
+    if (store && repo) {
+      store.cacheAuthorMergeCount(repo, author, count);
+    }
     // 300ms throttle — respects GitHub's ~30 req/min secondary rate limit on search
     await new Promise((r) => setTimeout(r, 300));
   }

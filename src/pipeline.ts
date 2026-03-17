@@ -536,7 +536,7 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number; explai
   }
 
   const spinner = ora("Building scorer context...").start();
-  const context = await buildScorerContext(items, github);
+  const context = await buildScorerContext(items, github, store, repoFull);
   spinner.succeed("Scorer context ready");
 
   const ranked = rankPRs(items, config, context);
