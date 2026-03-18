@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import { Command } from "commander";
 import ora from "ora";
+import { runBenchmark } from "./benchmark.js";
 import { findDuplicateClusters } from "./cluster.js";
 import { getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
@@ -766,6 +767,17 @@ program
     } finally {
       ctx.store.close();
     }
+  });
+
+// ── benchmark ───────────────────────────────────────────────────
+program
+  .command("benchmark")
+  .description("Compare embedding models for duplicate detection quality and speed")
+  .option("-r, --repo <owner/repo>", "Repository to benchmark against")
+  .option("--models <models>", "Comma-separated Ollama models to compare", "qwen3-embedding:0.6b,all-minilm:l6-v2")
+  .option("--thresholds <thresholds>", "Comma-separated similarity thresholds", "0.82,0.85")
+  .action(async (opts) => {
+    await runBenchmark({ repo: opts.repo, models: opts.models, thresholds: opts.thresholds });
   });
 
 // ── reset ───────────────────────────────────────────────────────

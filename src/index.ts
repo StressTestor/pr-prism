@@ -1,5 +1,6 @@
 // Public API — pipeline functions for programmatic use
 
+export { computeClusterOverlap, runBenchmark } from "./benchmark.js";
 export { findDuplicateClusters } from "./cluster.js";
 export { getRepos, getVisionDoc, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 export { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
