@@ -41,9 +41,9 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Install pr-prism
+    - name: Install prism-triage
       shell: bash
-      run: npm install -g pr-prism
+      run: npm install -g prism-triage
 
     - name: Create config
       shell: bash
