@@ -14,11 +14,13 @@ who this is for: maintainers, triage teams, anyone staring at a 4-digit PR count
 ## quickstart
 
 ```bash
-npm install -g prism-triage
+brew tap stresstestor/tap && brew install prism-triage
 prism init
 prism scan
 prism triage
 ```
+
+or with npm: `npm install -g prism-triage`
 
 ## pipeline
 
