@@ -1,7 +1,7 @@
 # pr-prism
 
 [![CI](https://github.com/StressTestor/pr-prism/actions/workflows/ci.yml/badge.svg)](https://github.com/StressTestor/pr-prism/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/pr-prism)](https://www.npmjs.com/package/pr-prism)
+[![npm version](https://img.shields.io/npm/v/prism-triage)](https://www.npmjs.com/package/prism-triage)
 [![license](https://img.shields.io/github/license/StressTestor/pr-prism)](LICENSE)
 [![node](https://img.shields.io/node/v/pr-prism)](package.json)
 
@@ -14,7 +14,7 @@ who this is for: maintainers, triage teams, anyone staring at a 4-digit PR count
 ## quickstart
 
 ```bash
-npm install -g pr-prism
+npm install -g prism-triage
 prism init
 prism scan
 prism triage
@@ -193,7 +193,7 @@ for repos with 5000+ items, automatically switches from brute-force to ANN pre-f
 pipeline functions are independently importable:
 
 ```ts
-import { createPipelineContext, runScan, runDupes, runRank } from "pr-prism";
+import { createPipelineContext, runScan, runDupes, runRank } from "prism-triage";
 
 const ctx = await createPipelineContext();
 await runScan(ctx, { json: true });
