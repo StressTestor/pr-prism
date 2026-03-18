@@ -10,6 +10,9 @@ all notable changes to pr-prism are documented here.
 - automatic Ollama model pulling when benchmarked model is not locally available
 - multi-threshold support (test at 0.80, 0.82, 0.85, 0.87 to see where models diverge)
 
+### changed
+- default Ollama embedding model switched from `qwen3-embedding:0.6b` to `nomic-embed-text` (768 dims, 137M params). benchmarked at 791 items/min vs 214 for qwen3 (3.7x faster) with equal or better cluster detection on 10K items. existing installs with `EMBEDDING_MODEL=qwen3-embedding:0.6b` in .env are unaffected.
+
 ## [1.1.0] — 2026-03-17
 
 ### added
