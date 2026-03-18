@@ -161,7 +161,7 @@ async function runBenchmarkForModel(
   model: string,
   repoFull: string,
   thresholds: number[],
-  githubToken: string,
+  allItems: PRItem[],
 ): Promise<ModelResult> {
   const slug = repoFull.replace(/[/:.]/g, "-");
   const dbPath = resolve(process.cwd(), "data", `benchmark-${slug}-${model.replace(/[/:.]/g, "-")}.db`);
@@ -171,18 +171,6 @@ async function runBenchmarkForModel(
   const embedder = await createEmbeddingProvider({ provider: "ollama", model });
   const dimensions = embedder.dimensions;
   const store = new VectorStore(dbPath, dimensions, model);
-
-  spinner.text = `[${model}] fetching PRs and issues`;
-
-  const { owner, repo } = parseRepo(repoFull);
-  const github = new GitHubClient(githubToken, owner, repo);
-
-  const [prs, issues] = await Promise.all([
-    github.fetchPRsGraphQL({ state: "all", maxItems: 5000 }),
-    github.fetchIssuesGraphQL({ state: "all", maxItems: 5000 }),
-  ]);
-
-  const allItems: PRItem[] = [...prs, ...issues];
 
   if (allItems.length === 0) {
     spinner.warn(`[${model}] no items found in ${repoFull}`);
@@ -201,10 +189,30 @@ async function runBenchmarkForModel(
   const batchSize = 50;
   const startTime = Date.now();
 
+  let zeroVectors = 0;
+
   for (let i = 0; i < allItems.length; i += batchSize) {
     const batch = allItems.slice(i, i + batchSize);
     const texts = batch.map((item) => prepareEmbeddingText(item));
-    const embeddings = await embedder.embedBatch(texts);
+
+    let embeddings: number[][];
+    try {
+      embeddings = await embedder.embedBatch(texts);
+    } catch {
+      // Batch failed (context length, etc.) — try individually with truncated text
+      embeddings = [];
+      for (const text of texts) {
+        try {
+          // Truncate to ~500 chars to fit small context models like all-minilm
+          const truncated = text.slice(0, 500);
+          const [single] = await embedder.embedBatch([truncated]);
+          embeddings.push(single);
+        } catch {
+          embeddings.push(new Array(embedder.dimensions).fill(0));
+          zeroVectors++;
+        }
+      }
+    }
 
     for (let j = 0; j < batch.length; j++) {
       const item = batch[j];
@@ -239,6 +247,10 @@ async function runBenchmarkForModel(
 
   const embedTimeMs = Date.now() - startTime;
   const itemsPerMinute = Math.round((allItems.length / (embedTimeMs / 1000)) * 60);
+
+  if (zeroVectors > 0) {
+    console.warn(chalk.yellow(`  warning: ${zeroVectors} items failed to embed (zero vectors)`));
+  }
 
   // cluster at each threshold
   spinner.text = `[${model}] clustering`;
@@ -305,10 +317,37 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
     await ensureOllamaModel(model);
   }
 
+  // fetch items once (shared across all models)
+  const { owner, repo } = parseRepo(repoFull);
+  const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
+  const fetchSpinner = ora("fetching PRs and issues (REST)...").start();
+  const prs = await github.fetchPRs({
+    state: "all",
+    maxItems: 5000,
+    onProgress: (fetched) => {
+      fetchSpinner.text = `fetching PRs... ${fetched}`;
+    },
+  });
+  fetchSpinner.text = "fetching issues...";
+  const issues = await github.fetchIssues({
+    state: "all",
+    maxItems: 5000,
+    onProgress: (fetched) => {
+      fetchSpinner.text = `fetching issues... ${fetched}`;
+    },
+  });
+  const allItems: PRItem[] = [...prs, ...issues];
+  fetchSpinner.succeed(`fetched ${allItems.length} items (${prs.length} PRs, ${issues.length} issues)`);
+
+  if (allItems.length === 0) {
+    console.log(chalk.red("no items found. check your repo and token."));
+    return;
+  }
+
   // run benchmark for each model
   const results: ModelResult[] = [];
   for (const model of models) {
-    const result = await runBenchmarkForModel(model, repoFull, thresholds, env.GITHUB_TOKEN);
+    const result = await runBenchmarkForModel(model, repoFull, thresholds, allItems);
     results.push(result);
   }
 

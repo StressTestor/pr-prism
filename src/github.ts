@@ -69,9 +69,13 @@ export class GitHubClient {
   }
 
   async withBackoff<T>(fn: () => Promise<T>): Promise<T> {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        return await fn();
+        const result = await fn();
+        if (result === undefined || result === null) {
+          throw new Error("API returned empty response");
+        }
+        return result;
       } catch (err: any) {
         // 429 rate limit — wait and retry
         if (err.status === 429) {
@@ -98,8 +102,14 @@ export class GitHubClient {
           );
         }
         // Other transient errors — retry with backoff
-        if (attempt < 2 && (err.status === 502 || err.status === 503 || err.status === 500)) {
+        const errStatus = err.status || err.response?.status;
+        const errMsg = err.message || "";
+        if (
+          attempt < 4 &&
+          (errStatus === 502 || errStatus === 503 || errStatus === 500 || errMsg.includes("502") || errMsg.includes("503"))
+        ) {
           const delay = (attempt + 1) * 5000;
+          console.warn(`Transient error (${errStatus || errMsg.slice(0, 40)}). Retrying in ${delay / 1000}s...`);
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
@@ -166,9 +176,15 @@ export class GitHubClient {
         ),
       );
 
+      if (!result) {
+        throw new Error("GraphQL returned empty result — check token permissions");
+      }
       this.updateGraphQLRateLimit((result as any).extensions);
 
-      const prs = result.repository.pullRequests;
+      const prs = result.repository?.pullRequests;
+      if (!prs) {
+        throw new Error(`GraphQL response missing pullRequests for ${this.owner}/${this.repo}`);
+      }
       totalCount = prs.totalCount;
 
       if (prs.nodes.length === 0) break;
