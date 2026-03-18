@@ -2,6 +2,14 @@
 
 all notable changes to pr-prism are documented here.
 
+## [1.2.0] — 2026-03-17
+
+### added
+- `prism benchmark` command for A/B comparing embedding models on duplicate detection quality and speed
+- cluster overlap computation using matched Jaccard index
+- automatic Ollama model pulling when benchmarked model is not locally available
+- multi-threshold support (test at 0.80, 0.82, 0.85, 0.87 to see where models diverge)
+
 ## [1.1.0] — 2026-03-17
 
 ### added

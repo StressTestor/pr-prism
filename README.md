@@ -61,6 +61,7 @@ triage ─ run everything in one shot
 | `prism init` | auto-detect providers, generate config |
 | `prism re-embed` | re-embed with current provider (no github fetch) |
 | `prism compare <n1> <n2>` | compare two PRs/issues for similarity |
+| `prism benchmark` | compare embedding models for quality + speed |
 | `prism reset` | wipe database and start fresh |
 
 ## flags
@@ -79,6 +80,8 @@ prism review --show 42              # show saved review
 prism triage --output markdown      # markdown output for github issues
 prism dupes --json | jq '.bestPick' # machine-readable NDJSON
 prism compare 42 99          # check similarity between two items
+prism benchmark --repo sst/opencode                              # compare default models
+prism benchmark --models qwen3-embedding:0.6b,all-minilm:l6-v2   # specify models
 ```
 
 ## zero cost setup
