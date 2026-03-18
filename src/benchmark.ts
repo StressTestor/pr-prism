@@ -37,7 +37,7 @@ export interface BenchmarkResult {
   repo: string;
   models: ModelResult[];
   thresholds: number[];
-  overlapByThreshold: Record<string, OverlapResult>;
+  overlaps: Array<{ model: string; threshold: number; overlap: OverlapResult }>;
   timestamp: string;
 }
 
@@ -381,48 +381,62 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
   }
   console.log(clusterTable.toString());
 
-  // ── overlap between first two models ─────────────────────────
-  console.log(chalk.bold("\ncluster overlap (model 1 vs model 2)"));
-  const [r1, r2] = results;
-  const overlapByThreshold: Record<string, OverlapResult> = {};
+  // ── overlap: each model vs baseline (first model) ───────────
+  const baseline = results[0];
+  const allOverlaps: Array<{ model: string; threshold: number; overlap: OverlapResult }> = [];
+  const repoSlug = repoFull.replace(/[/:.]/g, "-");
 
-  // reload clusters for overlap computation
+  // Load baseline clusters once per threshold
   for (const t of thresholds) {
-    // simplified clusters using item numbers from the cluster results
-    // re-run clustering to get actual cluster membership
-    const slug1 = repoFull.replace(/[/:.]/g, "-");
-    const db1Path = resolve(process.cwd(), "data", `benchmark-${slug1}-${r1.model.replace(/[/:.]/g, "-")}.db`);
-    const db2Path = resolve(process.cwd(), "data", `benchmark-${slug1}-${r2.model.replace(/[/:.]/g, "-")}.db`);
-
-    const store1 = new VectorStore(db1Path);
-    const store2 = new VectorStore(db2Path);
-
-    const items1 = store1.getAllItems(repoFull) as unknown as PRItem[];
-    const items2 = store2.getAllItems(repoFull) as unknown as PRItem[];
-
-    const clusters1 = findDuplicateClusters(store1, items1, { threshold: t, repo: repoFull });
-    const clusters2 = findDuplicateClusters(store2, items2, { threshold: t, repo: repoFull });
-
-    store1.close();
-    store2.close();
-
-    const simplified1: SimplifiedCluster[] = clusters1.map((c) => ({
-      id: c.id,
-      items: c.items.map((item) => item.number),
-    }));
-    const simplified2: SimplifiedCluster[] = clusters2.map((c) => ({
-      id: c.id,
-      items: c.items.map((item) => item.number),
-    }));
-
-    const overlap = computeClusterOverlap(simplified1, simplified2);
-    overlapByThreshold[t.toString()] = overlap;
-
-    console.log(
-      `  threshold ${t}: ${overlap.overlapPercent}% overlap, ` +
-        `${overlap.matchedPairs.length} matched, ` +
-        `${overlap.uniqueToA} unique to ${r1.model}, ${overlap.uniqueToB} unique to ${r2.model}`,
+    const baseDbPath = resolve(
+      process.cwd(),
+      "data",
+      `benchmark-${repoSlug}-${baseline.model.replace(/[/:.]/g, "-")}.db`,
     );
+    const baseStore = new VectorStore(baseDbPath);
+    const baseItems = baseStore.getAllItems(repoFull) as unknown as PRItem[];
+    const baseClusters = findDuplicateClusters(baseStore, baseItems, { threshold: t, repo: repoFull });
+    const baseSimplified: SimplifiedCluster[] = baseClusters.map((c) => ({
+      id: c.id,
+      items: c.items.map((item) => item.number),
+    }));
+    baseStore.close();
+
+    for (let ri = 1; ri < results.length; ri++) {
+      const r = results[ri];
+      const dbPath = resolve(process.cwd(), "data", `benchmark-${repoSlug}-${r.model.replace(/[/:.]/g, "-")}.db`);
+      const store = new VectorStore(dbPath);
+      const items = store.getAllItems(repoFull) as unknown as PRItem[];
+      const clusters = findDuplicateClusters(store, items, { threshold: t, repo: repoFull });
+      const simplified: SimplifiedCluster[] = clusters.map((c) => ({
+        id: c.id,
+        items: c.items.map((item) => item.number),
+      }));
+      store.close();
+
+      const overlap = computeClusterOverlap(baseSimplified, simplified);
+      allOverlaps.push({ model: r.model, threshold: t, overlap });
+    }
+  }
+
+  // Print overlap table per threshold
+  for (const t of thresholds) {
+    console.log(chalk.bold(`\ncluster overlap vs ${baseline.model} @ ${t}`));
+    const overlapTable = new Table({
+      head: ["model", "overlap %", "matched", `unique to baseline`, "unique to model"],
+      style: { head: ["cyan"] },
+    });
+
+    for (const entry of allOverlaps.filter((o) => o.threshold === t)) {
+      overlapTable.push([
+        entry.model,
+        `${entry.overlap.overlapPercent}%`,
+        entry.overlap.matchedPairs.length,
+        entry.overlap.uniqueToA,
+        entry.overlap.uniqueToB,
+      ]);
+    }
+    console.log(overlapTable.toString());
   }
 
   // ── save results ─────────────────────────────────────────────
@@ -430,7 +444,7 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
     repo: repoFull,
     models: results,
     thresholds,
-    overlapByThreshold,
+    overlaps: allOverlaps,
     timestamp: new Date().toISOString(),
   };
 

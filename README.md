@@ -81,20 +81,20 @@ prism triage --output markdown      # markdown output for github issues
 prism dupes --json | jq '.bestPick' # machine-readable NDJSON
 prism compare 42 99          # check similarity between two items
 prism benchmark --repo sst/opencode                              # compare default models
-prism benchmark --models qwen3-embedding:0.6b,all-minilm:l6-v2   # specify models
+prism benchmark --models nomic-embed-text,qwen3-embedding:0.6b    # specify models
 ```
 
 ## zero cost setup
 
 run the whole thing for free:
 
-- **embeddings**: [ollama](https://ollama.com) + `qwen3-embedding:0.6b` (local, no API key)
+- **embeddings**: [ollama](https://ollama.com) + `nomic-embed-text` (local, 768 dims, 3.7x faster than qwen3)
 - **LLM**: [opencode zen](https://opencode.ai/zen) (kimi-k2.5-free, $0)
 - **github**: 5000 GraphQL points/hr with a PAT (~36 queries for 3500+ PRs)
 
 ```bash
 brew install ollama
-ollama pull qwen3-embedding:0.6b
+ollama pull nomic-embed-text
 ```
 
 cloud alternative: [jina](https://jina.ai/embeddings/) gives 10M free tokens per key, no account needed.
@@ -125,7 +125,7 @@ cross-repo dupe display: `[owner/repo1] #1234 <-> [owner/repo2] #567`
 
 | type | provider | cost | notes |
 |------|----------|------|-------|
-| embedding | ollama | free | local, default |
+| embedding | ollama | free | local, default (nomic-embed-text) |
 | embedding | jina | free tier | 10M tokens/key |
 | embedding | openai | paid | text-embedding-3-small |
 | embedding | voyageai | paid | |
@@ -212,7 +212,7 @@ ctx.store.close();
 ## notes
 
 - first scan of ~3500 PRs via GraphQL: ~3 min (pagination + author history)
-- embedding ~7000 items with ollama locally: ~80 min on M1 Air
+- embedding ~10000 items with nomic-embed-text locally: ~13 min on M1 Air (was ~47 min with qwen3)
 - after that it's incremental
 - switching providers: `prism re-embed` or `prism reset`
 - sqlite-vec pinned at 0.1.7-alpha.2 (alpha but stable in our testing)

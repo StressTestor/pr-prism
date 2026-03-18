@@ -106,7 +106,11 @@ export class GitHubClient {
         const errMsg = err.message || "";
         if (
           attempt < 4 &&
-          (errStatus === 502 || errStatus === 503 || errStatus === 500 || errMsg.includes("502") || errMsg.includes("503"))
+          (errStatus === 502 ||
+            errStatus === 503 ||
+            errStatus === 500 ||
+            errMsg.includes("502") ||
+            errMsg.includes("503"))
         ) {
           const delay = (attempt + 1) * 5000;
           console.warn(`Transient error (${errStatus || errMsg.slice(0, 40)}). Retrying in ${delay / 1000}s...`);

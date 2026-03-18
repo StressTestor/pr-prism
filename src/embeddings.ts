@@ -87,7 +87,7 @@ class OllamaEmbeddings implements EmbeddingProvider {
   private initialized = false;
 
   constructor(config: ProviderConfig) {
-    this.model = config.model || "qwen3-embedding:0.6b";
+    this.model = config.model || "nomic-embed-text";
     this.baseUrl = config.baseUrl || "http://localhost:11434";
   }
 

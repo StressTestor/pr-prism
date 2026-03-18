@@ -69,10 +69,10 @@ program
     let ollamaEmbedModels: string[] = [];
     let ollamaLLMModels: string[] = [];
     const embeddingModelPrefixes = [
+      "nomic-embed",
       "qwen3-embedding",
       "mxbai-embed",
       "all-minilm",
-      "nomic-embed",
       "snowflake-arctic-embed",
     ];
     const llmModelPrefixes = ["llama", "qwen", "mistral", "gemma", "phi", "deepseek"];
@@ -109,12 +109,12 @@ program
     let bestEmbedding: { provider: string; model: string } | null = null;
 
     if (ollamaEmbedModels.length > 0) {
-      const preferred = ollamaEmbedModels.find((m) => m.startsWith("qwen3-embedding")) || ollamaEmbedModels[0];
+      const preferred = ollamaEmbedModels.find((m) => m.startsWith("nomic-embed")) || ollamaEmbedModels[0];
       console.log(chalk.green(`  embedding: ollama (${ollamaEmbedModels.join(", ")})`));
       bestEmbedding = { provider: "ollama", model: preferred };
     } else if (ollamaRunning) {
       console.log(chalk.yellow("  ollama running but no embedding model found"));
-      console.log(chalk.dim("    recommended: ollama pull qwen3-embedding:0.6b"));
+      console.log(chalk.dim("    recommended: ollama pull nomic-embed-text"));
     }
 
     if (detectedKeys.length > 0) {
@@ -155,7 +155,7 @@ program
       console.log();
       console.log(chalk.bold("  local setup (no API keys needed):"));
       console.log("  1. install ollama: https://ollama.com");
-      console.log("  2. ollama pull qwen3-embedding:0.6b");
+      console.log("  2. ollama pull nomic-embed-text");
       console.log("  3. set EMBEDDING_PROVIDER=ollama in .env");
     }
 
@@ -774,7 +774,7 @@ program
   .command("benchmark")
   .description("Compare embedding models for duplicate detection quality and speed")
   .option("-r, --repo <owner/repo>", "Repository to benchmark against")
-  .option("--models <models>", "Comma-separated Ollama models to compare", "qwen3-embedding:0.6b,all-minilm:l6-v2")
+  .option("--models <models>", "Comma-separated Ollama models to compare", "nomic-embed-text,qwen3-embedding:0.6b")
   .option("--thresholds <thresholds>", "Comma-separated similarity thresholds", "0.82,0.85")
   .action(async (opts) => {
     await runBenchmark({ repo: opts.repo, models: opts.models, thresholds: opts.thresholds });
