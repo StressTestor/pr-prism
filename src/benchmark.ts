@@ -43,10 +43,7 @@ export interface BenchmarkResult {
 
 // ── cluster overlap ──────────────────────────────────────────────
 
-export function computeClusterOverlap(
-  clustersA: SimplifiedCluster[],
-  clustersB: SimplifiedCluster[],
-): OverlapResult {
+export function computeClusterOverlap(clustersA: SimplifiedCluster[], clustersB: SimplifiedCluster[]): OverlapResult {
   // both empty = identical = 100%
   if (clustersA.length === 0 && clustersB.length === 0) {
     return { overlapPercent: 100, uniqueToA: 0, uniqueToB: 0, matchedPairs: [] };
@@ -166,8 +163,8 @@ async function runBenchmarkForModel(
   thresholds: number[],
   githubToken: string,
 ): Promise<ModelResult> {
-  const slug = repoFull.replace(/[/:\.]/g, "-");
-  const dbPath = resolve(process.cwd(), "data", `benchmark-${slug}-${model.replace(/[/:\.]/g, "-")}.db`);
+  const slug = repoFull.replace(/[/:.]/g, "-");
+  const dbPath = resolve(process.cwd(), "data", `benchmark-${slug}-${model.replace(/[/:.]/g, "-")}.db`);
 
   const spinner = ora(`[${model}] creating embedder`).start();
 
@@ -268,7 +265,10 @@ export interface BenchmarkOptions {
 }
 
 export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
-  const models = opts.models.split(",").map((m) => m.trim()).filter(Boolean);
+  const models = opts.models
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
   if (models.length < 2) {
     console.error(chalk.red("benchmark requires at least 2 models (comma-separated)"));
     process.exit(1);
@@ -277,7 +277,7 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
   const thresholds = (opts.thresholds || "0.85,0.88,0.91")
     .split(",")
     .map((t) => parseFloat(t.trim()))
-    .filter((t) => !isNaN(t));
+    .filter((t) => !Number.isNaN(t));
 
   // resolve repo
   let repoFull: string;
@@ -351,9 +351,9 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
   for (const t of thresholds) {
     // simplified clusters using item numbers from the cluster results
     // re-run clustering to get actual cluster membership
-    const slug1 = repoFull.replace(/[/:\.]/g, "-");
-    const db1Path = resolve(process.cwd(), "data", `benchmark-${slug1}-${r1.model.replace(/[/:\.]/g, "-")}.db`);
-    const db2Path = resolve(process.cwd(), "data", `benchmark-${slug1}-${r2.model.replace(/[/:\.]/g, "-")}.db`);
+    const slug1 = repoFull.replace(/[/:.]/g, "-");
+    const db1Path = resolve(process.cwd(), "data", `benchmark-${slug1}-${r1.model.replace(/[/:.]/g, "-")}.db`);
+    const db2Path = resolve(process.cwd(), "data", `benchmark-${slug1}-${r2.model.replace(/[/:.]/g, "-")}.db`);
 
     const store1 = new VectorStore(db1Path);
     const store2 = new VectorStore(db2Path);
