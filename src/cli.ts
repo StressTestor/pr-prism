@@ -24,6 +24,7 @@ import {
 } from "./pipeline.js";
 import { reviewPR } from "./reviewer.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
+import { cosineSimilarity } from "./similarity.js";
 import { VectorStore } from "./store.js";
 import type { PRItem } from "./types.js";
 import { checkVisionAlignment } from "./vision.js";
@@ -964,6 +965,7 @@ program
   .option("-o, --output <path>", "Output file path", "prism-report.md")
   .option("--top <number>", "Top N ranked PRs to include", "20")
   .option("--clusters <number>", "Top N duplicate clusters to include", "25")
+  .option("--verbose", "Expand every cluster with per-item similarity breakdown (default for file output)")
   .option("--json", "Output report as JSON")
   .action(async (opts) => {
     const ctx = await createPipelineContext(opts.repo);
@@ -1065,31 +1067,110 @@ program
     }
     report += `\n`;
 
+    // verbose defaults to true for file output
+    const verbose = opts.verbose !== undefined ? opts.verbose : true;
+
     report += `## duplicate clusters (top ${clusterN})\n\n`;
-    report += `these PRs/issues are similar enough to likely be duplicates. the "best pick" is the highest-quality item in each group.\n\n`;
-    report += `| # | size | avg similarity | best pick | theme |\n`;
-    report += `|---|------|---------------|-----------|-------|\n`;
+    report += `these PRs/issues are similar enough to likely be duplicates. the "source of truth" is the highest-quality canonical item in each group.\n\n`;
+    report += `| # | size | avg similarity | source of truth | theme |\n`;
+    report += `|---|------|---------------|-----------------|-------|\n`;
     for (const cluster of clusters.slice(0, clusterN)) {
       const theme = cluster.theme.replace(/\|/g, "\\|").slice(0, 60);
-      report += `| ${cluster.id} | ${cluster.items.length} | ${(cluster.avgSimilarity * 100).toFixed(1)}% | [#${cluster.bestPick.number}](https://github.com/${repoFull}/pull/${cluster.bestPick.number}) | ${theme} |\n`;
+      // Source of truth: highest score, then earliest createdAt, then most reviews
+      const source = [...cluster.items].sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        const aDate = new Date(a.createdAt).getTime();
+        const bDate = new Date(b.createdAt).getTime();
+        if (aDate !== bDate) return aDate - bDate; // earlier = better
+        return (b.reviewCount || 0) - (a.reviewCount || 0);
+      })[0];
+      const linkType = source.type === "pr" ? "pull" : "issues";
+      report += `| ${cluster.id} | ${cluster.items.length} | ${(cluster.avgSimilarity * 100).toFixed(1)}% | [#${source.number}](https://github.com/${repoFull}/${linkType}/${source.number}) | ${theme} |\n`;
     }
     report += `\n`;
 
-    const bigClusters = clusters.filter((c) => c.items.length >= 10).slice(0, 10);
-    if (bigClusters.length > 0) {
-      report += `## largest duplicate groups\n\n`;
-      for (const cluster of bigClusters) {
-        report += `### cluster #${cluster.id}: ${cluster.theme.slice(0, 80)} (${cluster.items.length} items)\n\n`;
-        report += `| # | author | title | updated |\n`;
-        report += `|---|--------|-------|--------|\n`;
-        for (const item of cluster.items.slice(0, 15)) {
-          const title = item.title.replace(/\|/g, "\\|").slice(0, 60);
-          report += `| [#${item.number}](https://github.com/${repoFull}/pull/${item.number}) | ${item.author || "?"} | ${title} | ${item.updatedAt.slice(0, 10)} |\n`;
+    if (verbose) {
+      report += `## cluster details\n\n`;
+      report += `each cluster expanded with per-item similarity against the source of truth. close duplicates as "duplicate of #source".\n\n`;
+
+      for (const cluster of clusters.slice(0, clusterN)) {
+        // Pick source of truth with same sort criteria
+        const source = [...cluster.items].sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          const aDate = new Date(a.createdAt).getTime();
+          const bDate = new Date(b.createdAt).getTime();
+          if (aDate !== bDate) return aDate - bDate;
+          return (b.reviewCount || 0) - (a.reviewCount || 0);
+        })[0];
+
+        const sourceId = `${repoFull}:${source.type}:${source.number}`;
+        const sourceEmb = store.getEmbedding(sourceId);
+        const sourceLinkType = source.type === "pr" ? "pull" : "issues";
+
+        const themeText = cluster.theme.replace(/\|/g, "\\|").slice(0, 80);
+        report += `### cluster ${cluster.id}: ${themeText} (${cluster.items.length} items)\n\n`;
+        report += `**source of truth:** [#${source.number}](https://github.com/${repoFull}/${sourceLinkType}/${source.number}) — "${source.title.slice(0, 80)}"\n`;
+        report += `opened: ${source.createdAt.slice(0, 10)} by @${source.author || "unknown"} | quality score: ${source.score.toFixed(2)}\n\n`;
+
+        const dupes = cluster.items.filter((i) => i.number !== source.number);
+        if (dupes.length > 0 && sourceEmb) {
+          // Compute pairwise similarity vs source
+          const dupesWithSim = dupes.map((item) => {
+            const itemId = `${repoFull}:${item.type}:${item.number}`;
+            const itemEmb = store.getEmbedding(itemId);
+            let sim = 0;
+            if (itemEmb && sourceEmb) {
+              try {
+                sim = cosineSimilarity(sourceEmb, itemEmb);
+              } catch {
+                sim = 0;
+              }
+            }
+            return { ...item, similarity: sim };
+          });
+
+          // Sort by similarity descending
+          dupesWithSim.sort((a, b) => b.similarity - a.similarity);
+
+          report += `**duplicates (${dupes.length}):**\n\n`;
+          report += `| # | similarity | title | opened | author |\n`;
+          report += `|---|-----------|-------|--------|--------|\n`;
+          for (const d of dupesWithSim) {
+            const dLinkType = d.type === "pr" ? "pull" : "issues";
+            const title = d.title.replace(/\|/g, "\\|").slice(0, 60);
+            report += `| [#${d.number}](https://github.com/${repoFull}/${dLinkType}/${d.number}) | ${(d.similarity * 100).toFixed(1)}% | ${title} | ${d.createdAt.slice(0, 10)} | @${d.author || "unknown"} |\n`;
+          }
+        } else if (dupes.length > 0) {
+          report += `**duplicates (${dupes.length}):**\n\n`;
+          report += `| # | title | opened | author |\n`;
+          report += `|---|-------|--------|--------|\n`;
+          for (const d of dupes) {
+            const dLinkType = d.type === "pr" ? "pull" : "issues";
+            const title = d.title.replace(/\|/g, "\\|").slice(0, 60);
+            report += `| [#${d.number}](https://github.com/${repoFull}/${dLinkType}/${d.number}) | ${title} | ${d.createdAt.slice(0, 10)} | @${d.author || "unknown"} |\n`;
+          }
         }
-        if (cluster.items.length > 15) {
-          report += `| ... | | +${cluster.items.length - 15} more | |\n`;
+        report += `\n---\n\n`;
+      }
+    } else {
+      // Non-verbose: show only large clusters in summary
+      const bigClusters = clusters.filter((c) => c.items.length >= 10).slice(0, 10);
+      if (bigClusters.length > 0) {
+        report += `## largest duplicate groups\n\n`;
+        for (const cluster of bigClusters) {
+          report += `### cluster #${cluster.id}: ${cluster.theme.slice(0, 80)} (${cluster.items.length} items)\n\n`;
+          report += `| # | author | title | updated |\n`;
+          report += `|---|--------|-------|--------|\n`;
+          for (const item of cluster.items.slice(0, 15)) {
+            const title = item.title.replace(/\|/g, "\\|").slice(0, 60);
+            const linkType = item.type === "pr" ? "pull" : "issues";
+            report += `| [#${item.number}](https://github.com/${repoFull}/${linkType}/${item.number}) | ${item.author || "?"} | ${title} | ${item.updatedAt.slice(0, 10)} |\n`;
+          }
+          if (cluster.items.length > 15) {
+            report += `| ... | | +${cluster.items.length - 15} more | |\n`;
+          }
+          report += `\n`;
         }
-        report += `\n`;
       }
     }
 
