@@ -1,3 +1,5 @@
+import type { OwnerSuggestion } from "./routing.js";
+
 export interface DupeMatch {
   number: number;
   type: "pr" | "issue";
@@ -17,12 +19,14 @@ function pct(value: number): string {
 
 /**
  * Format a triage comment listing duplicate matches for a new issue/PR.
+ * Optionally includes suggested reviewers from CODEOWNERS.
  */
 export function formatTriageComment(
   repo: string,
   matches: DupeMatch[],
   source: DupeMatch,
   elapsedMs: number,
+  owners?: OwnerSuggestion[],
 ): string {
   const rows = matches
     .map(
@@ -33,7 +37,7 @@ export function formatTriageComment(
 
   const elapsed = (elapsedMs / 1000).toFixed(1);
 
-  return `## pr-prism triage
+  let comment = `## pr-prism triage
 
 this issue is similar to existing items:
 
@@ -41,9 +45,18 @@ this issue is similar to existing items:
 |---|-----------|-------|
 ${rows}
 
-**source of truth:** [#${source.number}](${issueUrl(repo, source.number)}) — close this as duplicate if appropriate.
+**source of truth:** [#${source.number}](${issueUrl(repo, source.number)}) — close this as duplicate if appropriate.`;
 
-*triaged by [pr-prism](https://github.com/StressTestor/pr-prism) in ${elapsed}s*`;
+  if (owners && owners.length > 0) {
+    const ownerList = owners
+      .map((o) => `@${o.login} (${o.reason})`)
+      .join(", ");
+    comment += `\n\n**suggested reviewers:** ${ownerList}`;
+  }
+
+  comment += `\n\n*triaged by [pr-prism](https://github.com/StressTestor/pr-prism) in ${elapsed}s*`;
+
+  return comment;
 }
 
 /**
