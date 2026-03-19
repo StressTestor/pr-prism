@@ -1229,7 +1229,12 @@ const isDirectRun =
   process.argv[1]?.endsWith("cli.js") || process.argv[1]?.endsWith("cli.ts") || process.argv[1]?.includes("prism");
 
 if (isDirectRun) {
-  program.parse();
+  program.parseAsync().catch((err: any) => {
+    // Print clean error message without stack trace for known errors
+    const message = err?.message || String(err);
+    console.error(`error: ${message}`);
+    process.exit(1);
+  });
 }
 
 export { program };
