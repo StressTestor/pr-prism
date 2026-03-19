@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { loadServerConfig, loadRepoConfig, DEFAULT_REPO_CONFIG } from "./config.js";
 import { parseWebhookEvent, verifyWebhookSignature } from "./webhook.js";
 import { triageNewItem } from "./triage.js";
 import type { TriageConfig } from "./triage.js";
@@ -7,26 +8,24 @@ import { runBacklogScan, startWeeklyDigest } from "./scheduler.js";
 import type { BacklogScanConfig } from "./scheduler.js";
 import { getRepoStatus, isRepoScanning, queueWebhook } from "./db.js";
 
+const serverConfig = loadServerConfig();
+
 const app = new Hono();
 
-const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET ?? "";
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? "";
-const PORT = Number.parseInt(process.env.PORT ?? "3000", 10);
-
-const triageConfig: TriageConfig = {
-  dataDir: process.env.PRISM_DATA_DIR ?? "./data",
-  jinaApiKey: process.env.JINA_API_KEY ?? "",
-  similarityThreshold: Number.parseFloat(process.env.PRISM_SIMILARITY_THRESHOLD ?? "0.8"),
-  autoClose: process.env.PRISM_AUTO_CLOSE === "true",
-  autoCloseThreshold: Number.parseFloat(process.env.PRISM_AUTO_CLOSE_THRESHOLD ?? "0.95"),
-};
-
-const backlogConfig: BacklogScanConfig = {
-  dataDir: triageConfig.dataDir,
-  jinaApiKey: triageConfig.jinaApiKey,
-  githubToken: GITHUB_TOKEN,
-  similarityThreshold: triageConfig.similarityThreshold,
-};
+/**
+ * Build a TriageConfig for a specific repo by merging server-level
+ * settings with per-repo settings from config.json.
+ */
+function triageConfigFor(owner: string, repo: string): TriageConfig {
+  const repoConfig = loadRepoConfig(serverConfig.dataDir, owner, repo);
+  return {
+    dataDir: serverConfig.dataDir,
+    jinaApiKey: serverConfig.jinaApiKey,
+    similarityThreshold: repoConfig.similarityThreshold,
+    autoClose: repoConfig.autoClose,
+    autoCloseThreshold: repoConfig.autoCloseThreshold,
+  };
+}
 
 // placeholder postComment — logs to stdout until Task 8 adds real GitHub App auth
 async function postComment(repo: string, number: number, body: string): Promise<void> {
@@ -84,7 +83,7 @@ app.get("/status/:owner/:repo", (c) => {
   const owner = c.req.param("owner");
   const repo = c.req.param("repo");
 
-  const status = getRepoStatus(triageConfig.dataDir, owner, repo);
+  const status = getRepoStatus(serverConfig.dataDir, owner, repo);
   const scanning = isRepoScanning(owner, repo);
 
   return c.json({
@@ -101,12 +100,7 @@ app.post("/webhook", async (c) => {
   const body = await c.req.text();
   const signature = c.req.header("x-hub-signature-256") ?? "";
 
-  if (!WEBHOOK_SECRET) {
-    console.error("[webhook] GITHUB_WEBHOOK_SECRET is not set");
-    return c.json({ error: "server misconfigured" }, 500);
-  }
-
-  if (!verifyWebhookSignature(body, signature, WEBHOOK_SECRET)) {
+  if (!verifyWebhookSignature(body, signature, serverConfig.githubWebhookSecret)) {
     return c.json({ error: "invalid signature" }, 401);
   }
 
@@ -131,13 +125,16 @@ app.post("/webhook", async (c) => {
       `[webhook] ${eventName} event: ${installRepos.map((r) => r.fullName).join(", ")}`,
     );
 
-    if (!backlogConfig.jinaApiKey || !backlogConfig.githubToken) {
-      console.warn("[backlog] JINA_API_KEY or GITHUB_TOKEN not set, skipping backlog scan");
-      return c.json({ received: true, event: eventName, repos: installRepos.length, skipped: true });
-    }
-
     // kick off backlog scans in the background (don't block webhook response)
     for (const { owner, repo, fullName } of installRepos) {
+      const repoConfig = loadRepoConfig(serverConfig.dataDir, owner, repo);
+      const backlogConfig: BacklogScanConfig = {
+        dataDir: serverConfig.dataDir,
+        jinaApiKey: serverConfig.jinaApiKey,
+        githubToken: "", // placeholder until Task 8
+        similarityThreshold: repoConfig.similarityThreshold,
+      };
+
       runBacklogScan(owner, repo, backlogConfig, postIssue)
         .then(() => {
           console.log(`[backlog] ${fullName}: backlog scan completed successfully`);
@@ -171,6 +168,8 @@ app.post("/webhook", async (c) => {
   );
 
   // triage in the background so the webhook responds quickly
+  const triageConfig = triageConfigFor(event.repo.owner, event.repo.name);
+
   if (triageConfig.jinaApiKey) {
     triageNewItem(event, triageConfig, postComment, closeIssue)
       .then((result) => {
@@ -194,17 +193,17 @@ app.post("/webhook", async (c) => {
   return c.json({ received: true, event: event.eventType, number: event.number });
 });
 
-// start weekly digest cron
+// start weekly digest cron using default repo config thresholds
 startWeeklyDigest(
   {
-    dataDir: triageConfig.dataDir,
-    similarityThreshold: triageConfig.similarityThreshold,
-    autoClose: triageConfig.autoClose,
+    dataDir: serverConfig.dataDir,
+    similarityThreshold: DEFAULT_REPO_CONFIG.similarityThreshold,
+    autoClose: DEFAULT_REPO_CONFIG.autoClose,
   },
   postIssue,
 );
 
-serve({ fetch: app.fetch, port: PORT }, (info) => {
+serve({ fetch: app.fetch, port: serverConfig.port }, (info) => {
   console.log(`pr-prism webhook server listening on port ${info.port}`);
 });
 
