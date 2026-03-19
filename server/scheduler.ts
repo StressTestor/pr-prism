@@ -82,6 +82,11 @@ export async function runBacklogScan(
   repo: string,
   config: BacklogScanConfig,
   postIssue: (repo: string, title: string, body: string) => Promise<void>,
+  callbacks?: {
+    postComment?: (repo: string, number: number, body: string) => Promise<void>;
+    closeIssue?: (repo: string, number: number) => Promise<void>;
+    fetchFileContent?: (repo: string, path: string) => Promise<string | null>;
+  },
 ): Promise<void> {
   const fullName = `${owner}/${repo}`;
   console.log(`[backlog] starting backlog scan for ${fullName}`);
@@ -219,17 +224,16 @@ export async function runBacklogScan(
       autoCloseThreshold: 0.95,
     };
 
-    // placeholder callbacks — same as index.ts until Task 8 adds real GitHub App auth
-    const postComment = async (repo: string, number: number, body: string): Promise<void> => {
+    const postComment = callbacks?.postComment ?? (async (repo: string, number: number, body: string): Promise<void> => {
       console.log(`[triage] would post comment on ${repo}#${number}:\n${body}`);
-    };
-    const closeIssue = async (repo: string, number: number): Promise<void> => {
+    });
+    const closeIssue = callbacks?.closeIssue ?? (async (repo: string, number: number): Promise<void> => {
       console.log(`[triage] would close ${repo}#${number}`);
-    };
+    });
 
     for (const event of queued) {
       try {
-        await triageNewItem(event as WebhookEvent, triageConfig, postComment, closeIssue);
+        await triageNewItem(event as WebhookEvent, triageConfig, postComment, closeIssue, callbacks?.fetchFileContent);
       } catch (err) {
         console.error(`[backlog] error processing queued event:`, err);
       }
