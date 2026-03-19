@@ -3,9 +3,9 @@ import { Hono } from "hono";
 import { parseWebhookEvent, verifyWebhookSignature } from "./webhook.js";
 import { triageNewItem } from "./triage.js";
 import type { TriageConfig } from "./triage.js";
-import { runBacklogScan } from "./scheduler.js";
+import { runBacklogScan, startWeeklyDigest } from "./scheduler.js";
 import type { BacklogScanConfig } from "./scheduler.js";
-import { isRepoScanning, queueWebhook } from "./db.js";
+import { getRepoStatus, isRepoScanning, queueWebhook } from "./db.js";
 
 const app = new Hono();
 
@@ -78,6 +78,23 @@ function parseInstallationRepos(
 
 app.get("/health", (c) => {
   return c.json({ status: "ok" });
+});
+
+app.get("/status/:owner/:repo", (c) => {
+  const owner = c.req.param("owner");
+  const repo = c.req.param("repo");
+
+  const status = getRepoStatus(triageConfig.dataDir, owner, repo);
+  const scanning = isRepoScanning(owner, repo);
+
+  return c.json({
+    repo: `${owner}/${repo}`,
+    status: status.lastSyncTime ? "ready" : "pending",
+    totalItems: status.itemCount,
+    embeddingCount: status.embeddingCount,
+    lastSync: status.lastSyncTime ?? null,
+    scanning,
+  });
 });
 
 app.post("/webhook", async (c) => {
@@ -176,6 +193,16 @@ app.post("/webhook", async (c) => {
 
   return c.json({ received: true, event: event.eventType, number: event.number });
 });
+
+// start weekly digest cron
+startWeeklyDigest(
+  {
+    dataDir: triageConfig.dataDir,
+    similarityThreshold: triageConfig.similarityThreshold,
+    autoClose: triageConfig.autoClose,
+  },
+  postIssue,
+);
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`pr-prism webhook server listening on port ${info.port}`);
