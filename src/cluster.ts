@@ -86,6 +86,8 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
   const visited = new Set<string>();
   const clusters: Cluster[] = [];
 
+  // Phase 1: BFS to find connected components
+  const rawComponents: string[][] = [];
   for (const id of ids) {
     if (visited.has(id) || !adjacency.has(id)) continue;
 
@@ -101,6 +103,80 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
       }
     }
 
+    if (component.length >= 2) rawComponents.push(component);
+  }
+
+  // Phase 2: Centroid refinement — eject items that aren't similar to the cluster centroid.
+  // This breaks apart BFS mega-clusters where transitive chaining grouped unrelated items.
+  const refinedComponents: string[][] = [];
+  for (const component of rawComponents) {
+    if (component.length <= 3) {
+      // Small clusters don't need refinement
+      refinedComponents.push(component);
+      continue;
+    }
+
+    // Compute centroid (mean embedding)
+    const dims = embeddings.get(component[0])!.length;
+    const centroid = new Float32Array(dims);
+    for (const cid of component) {
+      const emb = embeddings.get(cid)!;
+      for (let d = 0; d < dims; d++) centroid[d] += emb[d];
+    }
+    for (let d = 0; d < dims; d++) centroid[d] /= component.length;
+
+    // Keep items above threshold similarity to centroid
+    const kept: string[] = [];
+    const ejected: string[] = [];
+    for (const cid of component) {
+      const sim = cosineSimilarity(embeddings.get(cid)!, centroid);
+      if (sim >= opts.threshold) {
+        kept.push(cid);
+      } else {
+        ejected.push(cid);
+      }
+    }
+
+    if (kept.length >= 2) {
+      refinedComponents.push(kept);
+    }
+
+    // Re-cluster ejected items among themselves (they might form smaller coherent groups)
+    if (ejected.length >= 2) {
+      const ejectedAdj = new Map<string, Set<string>>();
+      for (let i = 0; i < ejected.length; i++) {
+        for (let j = i + 1; j < ejected.length; j++) {
+          const sim = cosineSimilarity(embeddings.get(ejected[i])!, embeddings.get(ejected[j])!);
+          if (sim >= opts.threshold) {
+            if (!ejectedAdj.has(ejected[i])) ejectedAdj.set(ejected[i], new Set());
+            if (!ejectedAdj.has(ejected[j])) ejectedAdj.set(ejected[j], new Set());
+            ejectedAdj.get(ejected[i])!.add(ejected[j]);
+            ejectedAdj.get(ejected[j])!.add(ejected[i]);
+          }
+        }
+      }
+      // BFS on ejected items
+      const ejVisited = new Set<string>();
+      for (const eid of ejected) {
+        if (ejVisited.has(eid) || !ejectedAdj.has(eid)) continue;
+        const subComp: string[] = [];
+        const q = [eid];
+        while (q.length > 0) {
+          const cur = q.shift()!;
+          if (ejVisited.has(cur)) continue;
+          ejVisited.add(cur);
+          subComp.push(cur);
+          for (const nb of ejectedAdj.get(cur) || []) {
+            if (!ejVisited.has(nb)) q.push(nb);
+          }
+        }
+        if (subComp.length >= 2) refinedComponents.push(subComp);
+      }
+    }
+  }
+
+  // Phase 3: Score and build cluster objects
+  for (const component of refinedComponents) {
     if (component.length < 2) continue;
 
     const clusterItems: ScoredPR[] = component
