@@ -184,6 +184,41 @@ docker build -t pr-prism .
 docker run --rm -v $(pwd):/work -w /work --env-file .env pr-prism triage
 ```
 
+## live triage bot
+
+run pr-prism as a GitHub App that auto-triages every new issue and PR in real time.
+
+**what it does:**
+- comments on new issues with duplicate matches and source-of-truth links
+- optionally auto-closes obvious dupes (>95% similarity, opt-in)
+- suggests code owners via CODEOWNERS parsing
+- posts a weekly triage digest
+- runs a full backlog scan when first installed on a repo
+
+**self-hosted setup:**
+1. register a GitHub App at github.com/settings/apps/new
+   - permissions: issues (read+write), pull requests (read), metadata (read), contents (read)
+   - webhook URL: your server's public URL + /webhook
+   - subscribe to events: issues, pull_request, installation, installation_repositories
+2. provision a server (Oracle ARM free tier works)
+3. run the setup script:
+   ```bash
+   git clone https://github.com/StressTestor/pr-prism.git /opt/prism-bot
+   cd /opt/prism-bot && ./server/deploy/setup.sh
+   ```
+4. copy your .env and private key, then restart the service
+
+**per-repo config:** drop a `.prism.json` in your repo root to customize:
+```json
+{
+  "autoClose": true,
+  "autoCloseThreshold": 0.95,
+  "similarityThreshold": 0.85,
+  "weeklyDigest": true,
+  "smartRouting": true
+}
+```
+
 ## how dupe detection works
 
 embeds every PR/issue title+body into a vector, stores in sqlite-vec, computes cosine similarity across all pairs. anything above 0.85 gets clustered. each cluster picks a "best" based on quality score (tests, CI, diff size, reviews, recency, description quality). rest get flagged as dupes.

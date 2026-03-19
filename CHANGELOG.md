@@ -2,6 +2,23 @@
 
 all notable changes to pr-prism are documented here.
 
+## [2.0.0] — 2026-03-19
+
+### added
+- live triage bot: GitHub App that auto-triages new issues/PRs in real time
+- webhook server (Hono) with GitHub signature verification
+- per-repo sqlite-vec databases managed automatically
+- dupe detection comments posted within seconds of issue being opened
+- auto-close for obvious duplicates (>95% similarity, opt-in per repo)
+- smart owner routing via CODEOWNERS file parsing
+- weekly triage digest posted as GitHub issue every Monday
+- backlog scan on App installation — full triage report on first install
+- status endpoint: GET /status/:owner/:repo for health monitoring
+- per-repo config via .prism.json (auto-close threshold, digest toggle, routing toggle)
+- GitHub App installation token auth with 1-hour caching
+- deployment scripts for Oracle ARM (systemd + nginx + Let's Encrypt)
+- 88 new server tests (webhook, triage, DB, routing, config, auth, scheduler)
+
 ## [1.2.0] — 2026-03-17
 
 ### added

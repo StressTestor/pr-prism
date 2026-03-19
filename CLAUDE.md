@@ -31,6 +31,20 @@ single `SELECT v.id, v.embedding FROM vec_items v INNER JOIN items i ON v.id = i
 - `vision.test.ts` — boundary conditions for aligned/drifting/off-vision
 - `similarity.test.ts` — cosine similarity edge cases, zero vectors
 
+### server (v2.0)
+`server/` directory contains the live triage bot — a GitHub App webhook server that auto-triages new issues/PRs.
+
+key files:
+- `server/index.ts` — Hono HTTP server, webhook routing, status endpoint
+- `server/webhook.ts` — signature verification, event parsing
+- `server/triage.ts` — core dupe detection flow (embed → query → comment)
+- `server/db.ts` — per-repo sqlite-vec database management
+- `server/scheduler.ts` — backlog scan on install, weekly digest cron
+- `server/routing.ts` — CODEOWNERS parsing, owner suggestions
+- `server/auth.ts` — GitHub App JWT + installation token auth with caching
+- `server/config.ts` — server config from env, per-repo config from .prism.json
+- `server/format.ts` — comment and digest markdown formatting
+
 ## version history
 - v0.5.0 — publishable package, model tracking, re-embed, biome
 - v0.6.0 — reliability (zero-vector handling, embedder singleton, backoff fixes), transparency (--explain, --json)
