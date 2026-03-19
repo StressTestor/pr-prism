@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { loadServerConfig, loadRepoConfig, DEFAULT_REPO_CONFIG } from "./config.js";
@@ -7,8 +8,19 @@ import type { TriageConfig } from "./triage.js";
 import { runBacklogScan, startWeeklyDigest } from "./scheduler.js";
 import type { BacklogScanConfig } from "./scheduler.js";
 import { getRepoStatus, isRepoScanning, queueWebhook } from "./db.js";
+import {
+  getInstallationOctokit,
+  getInstallationToken,
+  postComment as ghPostComment,
+  closeIssue as ghCloseIssue,
+  createIssue as ghCreateIssue,
+  fetchFileContent as ghFetchFileContent,
+} from "./auth.js";
 
 const serverConfig = loadServerConfig();
+
+// Read the GitHub App private key from disk at startup
+const privateKey = readFileSync(serverConfig.githubPrivateKeyPath, "utf-8");
 
 const app = new Hono();
 
@@ -27,19 +39,57 @@ function triageConfigFor(owner: string, repo: string): TriageConfig {
   };
 }
 
-// placeholder postComment — logs to stdout until Task 8 adds real GitHub App auth
-async function postComment(repo: string, number: number, body: string): Promise<void> {
-  console.log(`[triage] would post comment on ${repo}#${number}:\n${body}`);
+/**
+ * Get an authenticated Octokit for the given installation ID.
+ * Tokens are cached for ~1 hour by the auth module.
+ */
+async function getOctokit(installationId: number) {
+  return getInstallationOctokit(serverConfig.githubAppId, privateKey, installationId);
 }
 
-// placeholder closeIssue — logs to stdout until Task 8 adds real GitHub App auth
-async function closeIssue(repo: string, number: number): Promise<void> {
-  console.log(`[triage] would close ${repo}#${number}`);
+/**
+ * Build callback functions bound to a specific installation.
+ * These closures match the signatures expected by triageNewItem, runBacklogScan, and startWeeklyDigest.
+ */
+function buildCallbacks(installationId: number) {
+  const postComment = async (fullName: string, number: number, body: string): Promise<void> => {
+    const [owner, repo] = fullName.split("/");
+    const octokit = await getOctokit(installationId);
+    await ghPostComment(octokit, owner, repo, number, body);
+    console.log(`[github] posted comment on ${fullName}#${number}`);
+  };
+
+  const closeIssue = async (fullName: string, number: number): Promise<void> => {
+    const [owner, repo] = fullName.split("/");
+    const octokit = await getOctokit(installationId);
+    await ghCloseIssue(octokit, owner, repo, number);
+    console.log(`[github] closed ${fullName}#${number}`);
+  };
+
+  const postIssue = async (fullName: string, title: string, body: string): Promise<void> => {
+    const [owner, repo] = fullName.split("/");
+    const octokit = await getOctokit(installationId);
+    const num = await ghCreateIssue(octokit, owner, repo, title, body);
+    console.log(`[github] created issue ${fullName}#${num}: ${title.slice(0, 80)}`);
+  };
+
+  const fetchFileContent = async (fullName: string, path: string): Promise<string | null> => {
+    const [owner, repo] = fullName.split("/");
+    const octokit = await getOctokit(installationId);
+    return ghFetchFileContent(octokit, owner, repo, path);
+  };
+
+  return { postComment, closeIssue, postIssue, fetchFileContent };
 }
 
-// placeholder postIssue — logs to stdout until Task 8 adds real GitHub App auth
-async function postIssue(repo: string, title: string, body: string): Promise<void> {
-  console.log(`[backlog] would create issue on ${repo}: ${title}\n${body.slice(0, 200)}...`);
+/**
+ * Extract the installation ID from a webhook payload.
+ * Every GitHub App webhook includes installation.id.
+ */
+function extractInstallationId(payload: Record<string, unknown>): number | null {
+  const installation = payload.installation as Record<string, unknown> | undefined;
+  if (!installation || typeof installation.id !== "number") return null;
+  return installation.id;
 }
 
 /**
@@ -113,6 +163,14 @@ app.post("/webhook", async (c) => {
     return c.json({ error: "invalid JSON" }, 400);
   }
 
+  // extract installation ID (present on every GitHub App webhook)
+  const installationId = extractInstallationId(payload);
+  if (!installationId) {
+    return c.json({ error: "missing installation.id in payload" }, 400);
+  }
+
+  const callbacks = buildCallbacks(installationId);
+
   // --- handle installation events (App installed or repos added) ---
   if (eventName === "installation" || eventName === "installation_repositories") {
     const installRepos = parseInstallationRepos(eventName, payload);
@@ -125,17 +183,26 @@ app.post("/webhook", async (c) => {
       `[webhook] ${eventName} event: ${installRepos.map((r) => r.fullName).join(", ")}`,
     );
 
+    // get a raw installation token for the backlog scan's GitHubClient (REST)
+    const installToken = await getInstallationToken(
+      serverConfig.githubAppId, privateKey, installationId,
+    );
+
     // kick off backlog scans in the background (don't block webhook response)
     for (const { owner, repo, fullName } of installRepos) {
       const repoConfig = loadRepoConfig(serverConfig.dataDir, owner, repo);
       const backlogConfig: BacklogScanConfig = {
         dataDir: serverConfig.dataDir,
         jinaApiKey: serverConfig.jinaApiKey,
-        githubToken: "", // placeholder until Task 8
+        githubToken: installToken,
         similarityThreshold: repoConfig.similarityThreshold,
       };
 
-      runBacklogScan(owner, repo, backlogConfig, postIssue)
+      runBacklogScan(owner, repo, backlogConfig, callbacks.postIssue, {
+          postComment: callbacks.postComment,
+          closeIssue: callbacks.closeIssue,
+          fetchFileContent: callbacks.fetchFileContent,
+        })
         .then(() => {
           console.log(`[backlog] ${fullName}: backlog scan completed successfully`);
         })
@@ -171,7 +238,7 @@ app.post("/webhook", async (c) => {
   const triageConfig = triageConfigFor(event.repo.owner, event.repo.name);
 
   if (triageConfig.jinaApiKey) {
-    triageNewItem(event, triageConfig, postComment, closeIssue)
+    triageNewItem(event, triageConfig, callbacks.postComment, callbacks.closeIssue, callbacks.fetchFileContent)
       .then((result) => {
         if (result.commented) {
           console.log(
@@ -194,13 +261,37 @@ app.post("/webhook", async (c) => {
 });
 
 // start weekly digest cron using default repo config thresholds
+// weekly digest doesn't have an installation context at cron time,
+// so we log a warning instead of posting if no installation is available
 startWeeklyDigest(
   {
     dataDir: serverConfig.dataDir,
     similarityThreshold: DEFAULT_REPO_CONFIG.similarityThreshold,
     autoClose: DEFAULT_REPO_CONFIG.autoClose,
   },
-  postIssue,
+  async (fullName: string, title: string, body: string): Promise<void> => {
+    // the weekly digest fires on a cron, not from a webhook, so we don't have
+    // an installation ID in context. we need to look it up from cached tokens
+    // or use the app-level API to find the installation for this repo.
+    const [owner, repo] = fullName.split("/");
+    try {
+      const { Octokit } = await import("@octokit/rest");
+      const { createAppAuth } = await import("@octokit/auth-app");
+      const appOctokit = new Octokit({
+        authStrategy: createAppAuth,
+        auth: { appId: serverConfig.githubAppId, privateKey },
+      });
+      const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
+        owner,
+        repo,
+      });
+      const octokit = await getOctokit(installation.id);
+      const num = await ghCreateIssue(octokit, owner, repo, title, body);
+      console.log(`[digest] created issue ${fullName}#${num}: ${title.slice(0, 80)}`);
+    } catch (err) {
+      console.error(`[digest] failed to post issue to ${fullName}:`, err);
+    }
+  },
 );
 
 serve({ fetch: app.fetch, port: serverConfig.port }, (info) => {
