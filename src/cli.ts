@@ -1076,12 +1076,25 @@ program
     report += `|---|------|---------------|-----------------|-------|\n`;
     for (const cluster of clusters.slice(0, clusterN)) {
       const theme = cluster.theme.replace(/\|/g, "\\|").slice(0, 60);
-      // Source of truth: highest score, then earliest createdAt, then most reviews
+      // Source of truth selection:
+      // - For issue-majority clusters: earliest open date first (canonical first report),
+      //   then description quality, then most discussion
+      // - For PR-majority clusters: highest quality score first, then earliest date
+      const issueCount = cluster.items.filter((i) => i.type === "issue").length;
+      const isIssueMajority = issueCount > cluster.items.length / 2;
       const source = [...cluster.items].sort((a, b) => {
+        if (isIssueMajority) {
+          // earliest first, quality as tiebreaker
+          const aDate = new Date(a.createdAt).getTime();
+          const bDate = new Date(b.createdAt).getTime();
+          if (aDate !== bDate) return aDate - bDate;
+          return b.score - a.score;
+        }
+        // PR clusters: highest score first, earliest as tiebreaker
         if (b.score !== a.score) return b.score - a.score;
         const aDate = new Date(a.createdAt).getTime();
         const bDate = new Date(b.createdAt).getTime();
-        if (aDate !== bDate) return aDate - bDate; // earlier = better
+        if (aDate !== bDate) return aDate - bDate;
         return (b.reviewCount || 0) - (a.reviewCount || 0);
       })[0];
       const linkType = source.type === "pr" ? "pull" : "issues";
@@ -1094,8 +1107,16 @@ program
       report += `each cluster expanded with per-item similarity against the source of truth. close duplicates as "duplicate of #source".\n\n`;
 
       for (const cluster of clusters.slice(0, clusterN)) {
-        // Pick source of truth with same sort criteria
+        // Pick source of truth with same criteria as summary table
+        const issueCount2 = cluster.items.filter((i) => i.type === "issue").length;
+        const isIssueMajority2 = issueCount2 > cluster.items.length / 2;
         const source = [...cluster.items].sort((a, b) => {
+          if (isIssueMajority2) {
+            const aDate = new Date(a.createdAt).getTime();
+            const bDate = new Date(b.createdAt).getTime();
+            if (aDate !== bDate) return aDate - bDate;
+            return b.score - a.score;
+          }
           if (b.score !== a.score) return b.score - a.score;
           const aDate = new Date(a.createdAt).getTime();
           const bDate = new Date(b.createdAt).getTime();
