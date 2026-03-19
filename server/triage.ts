@@ -4,6 +4,8 @@ import type { StoreItem } from "../src/types.js";
 import { isRepoScanning, openRepoDB, queueWebhook } from "./db.js";
 import { formatAutoCloseComment, formatTriageComment } from "./format.js";
 import type { DupeMatch } from "./format.js";
+import { suggestOwners } from "./routing.js";
+import type { OwnerSuggestion } from "./routing.js";
 import type { WebhookEvent } from "./webhook.js";
 
 export type { DupeMatch } from "./format.js";
@@ -31,6 +33,7 @@ export async function triageNewItem(
   config: TriageConfig,
   postComment: (repo: string, number: number, body: string) => Promise<void>,
   closeIssue?: (repo: string, number: number) => Promise<void>,
+  fetchFileContent?: (repo: string, path: string) => Promise<string | null>,
 ): Promise<TriageResult> {
   const start = performance.now();
   const { owner, name: repoName, fullName: repo } = event.repo;
@@ -152,8 +155,22 @@ export async function triageNewItem(
 
     const elapsedMs = performance.now() - start;
 
+    // fetch CODEOWNERS and suggest owners
+    let owners: OwnerSuggestion[] = [];
+    if (fetchFileContent) {
+      let codeownersContent: string | null = null;
+      // try .github/CODEOWNERS first, then root CODEOWNERS
+      codeownersContent = await fetchFileContent(repo, ".github/CODEOWNERS");
+      if (!codeownersContent) {
+        codeownersContent = await fetchFileContent(repo, "CODEOWNERS");
+      }
+      if (codeownersContent) {
+        owners = suggestOwners(event.title, event.body, codeownersContent);
+      }
+    }
+
     // post comment
-    const comment = formatTriageComment(repo, matches, source, elapsedMs);
+    const comment = formatTriageComment(repo, matches, source, elapsedMs, owners);
     await postComment(repo, event.number, comment);
 
     let closed = false;
