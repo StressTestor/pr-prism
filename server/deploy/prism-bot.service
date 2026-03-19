@@ -1,0 +1,17 @@
+[Unit]
+Description=PR Prism Triage Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/prism-bot
+EnvironmentFile=/opt/prism-bot/server/.env
+ExecStart=/usr/bin/node /opt/prism-bot/server/dist/index.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
