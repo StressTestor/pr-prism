@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { VectorStore } from "../src/store.js";
 
 export interface RepoStatus {
@@ -88,6 +89,21 @@ export function queueWebhook(owner: string, repo: string, event: unknown): void 
   queue.push(event);
 }
 
+/** Count items created on or after the given ISO date string. */
+export function getItemCountSince(dataDir: string, owner: string, repo: string, since: string): number {
+  const dbPath = getRepoDBPath(dataDir, owner, repo);
+  if (!existsSync(dbPath)) return 0;
+
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const row = db.prepare("SELECT COUNT(*) as c FROM items WHERE repo = ? AND created_at >= ?")
+      .get(`${owner}/${repo}`, since) as { c: number } | undefined;
+    return row?.c ?? 0;
+  } finally {
+    db.close();
+  }
+}
+
 /** Return and clear all queued webhook events for a repo. */
 export function drainWebhookQueue(owner: string, repo: string): unknown[] {
   const key = repoKey(owner, repo);
@@ -96,4 +112,33 @@ export function drainWebhookQueue(owner: string, repo: string): unknown[] {
   const events = [...queue];
   webhookQueues.delete(key);
   return events;
+}
+
+/**
+ * Scan the dataDir for repo directories (format: {owner}-{repo}/prism.db).
+ * Returns array of { owner, repo } for each installed repo.
+ */
+export function listInstalledRepos(dataDir: string): Array<{ owner: string; repo: string }> {
+  if (!existsSync(dataDir)) return [];
+
+  const entries = readdirSync(dataDir, { withFileTypes: true });
+  const repos: Array<{ owner: string; repo: string }> = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    // directory format: {owner}-{repo}
+    const dashIdx = entry.name.indexOf("-");
+    if (dashIdx < 1) continue;
+
+    const dbPath = join(dataDir, entry.name, "prism.db");
+    if (!existsSync(dbPath)) continue;
+
+    const owner = entry.name.slice(0, dashIdx);
+    const repo = entry.name.slice(dashIdx + 1);
+    if (owner && repo) {
+      repos.push({ owner, repo });
+    }
+  }
+
+  return repos;
 }
