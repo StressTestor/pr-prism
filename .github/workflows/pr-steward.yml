@@ -1,0 +1,47 @@
+name: pr steward
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize, edited, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
+  check_suite:
+    types: [completed]
+  status:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: pr-steward-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  review-and-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      EVENT_PR: ${{ github.event.pull_request.number || '' }}
+      PR_STEWARD_REF: 582666759a0fe02e05cf12a2537307056e968417
+      TRUSTED_AUTHORS: StressTestor,dependabot[bot],renovate[bot],github-actions[bot]
+      HOLD_LABELS: hold,blocked,do-not-merge,wip
+      AUTOMERGE_LABELS: automerge,safe-to-automerge
+      RISK_OVERRIDE_LABEL: safe-to-automerge
+      MAX_CHANGED_FILES: "20"
+      MAX_DIFF_LINES: "800"
+      MERGE_METHOD: squash
+      DRY_RUN: "false"
+    steps:
+      - name: Download pinned steward
+        run: curl -fsSL "https://raw.githubusercontent.com/StressTestor/StressTestor/${PR_STEWARD_REF}/.github/pr-steward/pr-steward.js" -o pr-steward.js
+      - name: Review and merge safe pull requests
+        run: node pr-steward.js
