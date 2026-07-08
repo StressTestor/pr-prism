@@ -226,6 +226,35 @@ describe("findDuplicateClusters", () => {
     store.close();
   });
 
+  it("det-stable-order: equal-size clusters get deterministic IDs by ascending item number", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    // Insert the higher-numbered cluster FIRST so discovery order alone would give
+    // it id 1. Two orthogonal size-2 clusters; the tie-break must order by number.
+    const embA = new Float32Array([1, 0, 0, 0]);
+    const embB = new Float32Array([0, 1, 0, 0]);
+    const items = [makePR(10, "hi-a"), makePR(11, "hi-b"), makePR(2, "lo-a"), makePR(3, "lo-b")];
+    store.upsert(storeItem(items[0], embA));
+    store.upsert(storeItem(items[1], embA));
+    store.upsert(storeItem(items[2], embB));
+    store.upsert(storeItem(items[3], embB));
+
+    const run1 = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    const run2 = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    expect(run1.length).toBe(2);
+    const byId = [...run1].sort((a, b) => a.id - b.id);
+    // cluster {2,3} (min number 2) must be id 1, before {10,11}.
+    expect(Math.min(...byId[0].items.map((i) => i.number))).toBe(2);
+    expect(Math.min(...byId[1].items.map((i) => i.number))).toBe(10);
+    // and stable across runs
+    expect(run2.map((c) => c.id + ":" + c.items.map((i) => i.number).sort().join(","))).toEqual(
+      run1.map((c) => c.id + ":" + c.items.map((i) => i.number).sort().join(",")),
+    );
+    store.close();
+  });
+
   it("single item — no cluster formed", () => {
     const path = tmpDb();
     dbs.push(path);

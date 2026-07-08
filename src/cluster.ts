@@ -242,7 +242,23 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
   }
 
   // Sort by size descending, then assign sequential IDs
-  clusters.sort((a, b) => b.items.length - a.items.length);
+  // Deterministic order: size desc, then by the cluster's lexically-lowest
+  // (repo, number) so equal-size clusters always get the same ids regardless of
+  // discovery/iteration order.
+  const clusterRef = (c: Cluster) => {
+    let best = c.items[0];
+    for (const it of c.items) {
+      if (it.repo < best.repo || (it.repo === best.repo && it.number < best.number)) best = it;
+    }
+    return best;
+  };
+  clusters.sort((a, b) => {
+    if (b.items.length !== a.items.length) return b.items.length - a.items.length;
+    const ka = clusterRef(a);
+    const kb = clusterRef(b);
+    if (ka.repo !== kb.repo) return ka.repo < kb.repo ? -1 : 1;
+    return ka.number - kb.number;
+  });
   clusters.forEach((c, i) => {
     c.id = i + 1;
   });
