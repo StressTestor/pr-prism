@@ -39,6 +39,13 @@ export interface Cluster {
   items: ScoredPR[];
   bestPick: ScoredPR;
   avgSimilarity: number;
+  /**
+   * Lowest pairwise similarity between any two members. Clustering is
+   * single-linkage, so a cluster can chain in members whose pairwise
+   * similarity is below the threshold; avgSimilarity hides this, minSimilarity
+   * exposes it. A large avg-min gap means the cluster is not internally tight.
+   */
+  minSimilarity: number;
   theme: string;
 }
 

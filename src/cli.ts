@@ -1032,6 +1032,7 @@ program
             id: c.id,
             size: c.items.length,
             avgSimilarity: c.avgSimilarity,
+            minSimilarity: c.minSimilarity,
             bestPick: c.bestPick.number,
             theme: c.theme,
           })),
@@ -1072,10 +1073,14 @@ program
 
     report += `## duplicate clusters (top ${clusterN})\n\n`;
     report += `these PRs/issues are similar enough to likely be duplicates. the "source of truth" is the highest-quality canonical item in each group.\n\n`;
-    report += `| # | size | avg similarity | source of truth | theme |\n`;
-    report += `|---|------|---------------|-----------------|-------|\n`;
+    report += `**confidence** reflects the *minimum* pairwise similarity inside the cluster, not the average. clustering is single-linkage, so a cluster can chain in loosely-related items; a low min similarity means the members are not all mutually similar and the group should be eyeballed before closing anything. `;
+    report += `high = min ≥ 90%, solid = min ≥ 80%, loose = min < 80% (likely chained, split before acting).\n\n`;
+    report += `| # | size | avg similarity | min similarity | confidence | source of truth | theme |\n`;
+    report += `|---|------|---------------|----------------|-----------|-----------------|-------|\n`;
     for (const cluster of clusters.slice(0, clusterN)) {
       const theme = cluster.theme.replace(/\|/g, "\\|").slice(0, 60);
+      const minPct = cluster.minSimilarity * 100;
+      const confidence = minPct >= 90 ? "high" : minPct >= 80 ? "solid" : "loose ⚠";
       // Source of truth selection:
       // - For issue-majority clusters: earliest open date first (canonical first report),
       //   then description quality, then most discussion
@@ -1098,7 +1103,7 @@ program
         return (b.reviewCount || 0) - (a.reviewCount || 0);
       })[0];
       const linkType = source.type === "pr" ? "pull" : "issues";
-      report += `| ${cluster.id} | ${cluster.items.length} | ${(cluster.avgSimilarity * 100).toFixed(1)}% | [#${source.number}](https://github.com/${repoFull}/${linkType}/${source.number}) | ${theme} |\n`;
+      report += `| ${cluster.id} | ${cluster.items.length} | ${(cluster.avgSimilarity * 100).toFixed(1)}% | ${minPct.toFixed(1)}% | ${confidence} | [#${source.number}](https://github.com/${repoFull}/${linkType}/${source.number}) | ${theme} |\n`;
     }
     report += `\n`;
 

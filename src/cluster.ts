@@ -214,7 +214,8 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
     if (clusterItems.length < 2) continue;
 
     let totalSim = 0,
-      pairs = 0;
+      pairs = 0,
+      minSim = 1;
     const MAX_PAIRS = 100;
     const totalPossiblePairs = (component.length * (component.length - 1)) / 2;
     if (totalPossiblePairs <= MAX_PAIRS) {
@@ -222,12 +223,15 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
         for (let j = i + 1; j < component.length; j++) {
           const embA = embeddings.get(component[i])!;
           const embB = embeddings.get(component[j])!;
-          totalSim += cosineSimilarity(embA, embB);
+          const sim = cosineSimilarity(embA, embB);
+          totalSim += sim;
+          if (sim < minSim) minSim = sim;
           pairs++;
         }
       }
     } else {
-      // Random sample of pairs
+      // Random sample of pairs. minSim over the sample is a lower-bound estimate
+      // for very large clusters, not an exact minimum.
       const sampled = new Set<string>();
       while (pairs < MAX_PAIRS) {
         const i = Math.floor(Math.random() * component.length);
@@ -238,7 +242,9 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
         sampled.add(key);
         const embA = embeddings.get(component[i])!;
         const embB = embeddings.get(component[j])!;
-        totalSim += cosineSimilarity(embA, embB);
+        const sim = cosineSimilarity(embA, embB);
+        totalSim += sim;
+        if (sim < minSim) minSim = sim;
         pairs++;
       }
     }
@@ -248,6 +254,7 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
       items: clusterItems,
       bestPick: clusterItems[0],
       avgSimilarity: pairs > 0 ? totalSim / pairs : 0,
+      minSimilarity: pairs > 0 ? minSim : 0,
       theme: clusterItems[0].title,
     });
   }

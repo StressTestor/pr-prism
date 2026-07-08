@@ -160,6 +160,45 @@ describe("findDuplicateClusters", () => {
     store.close();
   });
 
+  it("clusters identical vectors — minSimilarity is defined and ~1", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    const emb = new Float32Array([1, 2, 3, 4]);
+    const items = [makePR(1, "Fix bug"), makePR(2, "Fix bug again"), makePR(3, "Fix bug also")];
+    for (const item of items) store.upsert(storeItem(item, emb));
+
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    expect(clusters[0].minSimilarity).toBeCloseTo(1.0);
+    expect(clusters[0].minSimilarity).toBeCloseTo(clusters[0].avgSimilarity);
+    store.close();
+  });
+
+  it("exposes chaining: minSimilarity < avgSimilarity when a cluster is single-linkage chained", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    // A(0deg) B(25deg) C(50deg): cos(A,B)=cos(B,C)=0.906 >= 0.85 link,
+    // but cos(A,C)=0.643 < 0.85. Single-linkage groups all three via B;
+    // minSimilarity must surface the weak A-C pair the avg hides.
+    const A = new Float32Array([1, 0, 0, 0]);
+    const B = new Float32Array([0.9063, 0.4226, 0, 0]);
+    const C = new Float32Array([0.6428, 0.766, 0, 0]);
+    const items = [makePR(1, "A"), makePR(2, "B"), makePR(3, "C")];
+    store.upsert(storeItem(items[0], A));
+    store.upsert(storeItem(items[1], B));
+    store.upsert(storeItem(items[2], C));
+
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    expect(clusters.length).toBe(1);
+    expect(clusters[0].items.length).toBe(3);
+    expect(clusters[0].minSimilarity).toBeLessThan(clusters[0].avgSimilarity);
+    expect(clusters[0].minSimilarity).toBeCloseTo(0.643, 2);
+    store.close();
+  });
+
   it("single item — no cluster formed", () => {
     const path = tmpDb();
     dbs.push(path);

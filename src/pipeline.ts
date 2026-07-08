@@ -334,6 +334,7 @@ export async function runDupes(
           id: c.id,
           size: c.items.length,
           avgSimilarity: c.avgSimilarity,
+          minSimilarity: c.minSimilarity,
           bestPick: c.bestPick.number,
           theme: c.theme,
           items: c.items.map((i) => ({ number: i.number, type: i.type, title: i.title, score: i.score })),
@@ -345,11 +346,11 @@ export async function runDupes(
 
   if (opts.output === "markdown") {
     let md = `## duplicate clusters\n\n`;
-    md += `| # | Size | Avg Sim | Best Pick | Theme |\n`;
-    md += `|---|------|---------|-----------|-------|\n`;
+    md += `| # | Size | Avg Sim | Min Sim | Best Pick | Theme |\n`;
+    md += `|---|------|---------|---------|-----------|-------|\n`;
     for (const c of clusters) {
       const theme = c.theme.replace(/\|/g, "\\|").slice(0, 60);
-      md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | #${c.bestPick.number} | ${theme} |\n`;
+      md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | ${(c.minSimilarity * 100).toFixed(1)}% | #${c.bestPick.number} | ${theme} |\n`;
     }
     md += `\nTotal: ${clusters.reduce((s, c) => s + c.items.length, 0)} items across ${clusters.length} clusters\n`;
     console.log(md);
@@ -357,8 +358,8 @@ export async function runDupes(
   }
 
   const table = new Table({
-    head: ["#", "Size", "Avg Sim", "Best Pick", "Theme"],
-    colWidths: [6, 6, 10, 12, 50],
+    head: ["#", "Size", "Avg Sim", "Min Sim", "Best Pick", "Theme"],
+    colWidths: [6, 6, 10, 10, 12, 44],
   });
 
   for (const cluster of clusters) {
@@ -366,8 +367,9 @@ export async function runDupes(
       cluster.id,
       cluster.items.length,
       `${(cluster.avgSimilarity * 100).toFixed(1)}%`,
+      `${(cluster.minSimilarity * 100).toFixed(1)}%`,
       `#${cluster.bestPick.number}`,
-      cluster.theme.slice(0, 48),
+      cluster.theme.slice(0, 42),
     ]);
   }
 
@@ -440,6 +442,7 @@ export async function runDupesMulti(
           id: c.id,
           size: c.items.length,
           avgSimilarity: c.avgSimilarity,
+          minSimilarity: c.minSimilarity,
           bestPick: { number: c.bestPick.number, repo: c.bestPick.repo },
           theme: c.theme,
           crossRepo: new Set(c.items.map((i) => i.repo)).size > 1,
@@ -452,12 +455,12 @@ export async function runDupesMulti(
 
   if (opts.output === "markdown") {
     let md = `## duplicate clusters (${repos.length} repos)\n\n`;
-    md += `| # | Size | Avg Sim | Best Pick | Theme |\n`;
-    md += `|---|------|---------|-----------|-------|\n`;
+    md += `| # | Size | Avg Sim | Min Sim | Best Pick | Theme |\n`;
+    md += `|---|------|---------|---------|-----------|-------|\n`;
     for (const c of clusters) {
       const theme = c.theme.replace(/\|/g, "\\|").slice(0, 60);
       const bestLabel = `[${c.bestPick.repo}] #${c.bestPick.number}`;
-      md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | ${bestLabel} | ${theme} |\n`;
+      md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | ${(c.minSimilarity * 100).toFixed(1)}% | ${bestLabel} | ${theme} |\n`;
     }
     md += `\nTotal: ${clusters.reduce((s, c) => s + c.items.length, 0)} items across ${clusters.length} clusters\n`;
     if (crossRepoClusters.length > 0) {
@@ -468,8 +471,8 @@ export async function runDupesMulti(
   }
 
   const table = new Table({
-    head: ["#", "Size", "Avg Sim", "Best Pick", "Theme"],
-    colWidths: [6, 6, 10, 30, 40],
+    head: ["#", "Size", "Avg Sim", "Min Sim", "Best Pick", "Theme"],
+    colWidths: [6, 6, 10, 10, 28, 36],
   });
 
   for (const cluster of clusters) {
@@ -478,8 +481,9 @@ export async function runDupesMulti(
       cluster.id,
       cluster.items.length,
       `${(cluster.avgSimilarity * 100).toFixed(1)}%`,
+      `${(cluster.minSimilarity * 100).toFixed(1)}%`,
       bestLabel,
-      cluster.theme.slice(0, 38),
+      cluster.theme.slice(0, 34),
     ]);
   }
 

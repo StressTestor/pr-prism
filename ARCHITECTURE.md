@@ -63,6 +63,7 @@ server/                 # webhook server (GitHub App)
 - **incremental processing**: only re-embeds new/changed items. crash-recoverable via sqlite
 - **read-only default**: no repo modifications unless `--apply-labels` explicitly passed
 - **cross-repo**: config accepts multiple repos, dupe detection works across repo boundaries
+- **cluster confidence**: clustering is single-linkage (BFS over pairs >= threshold) with a centroid-refinement pass to break chained mega-clusters. because single-linkage can still chain in loosely-related members, each cluster reports both `avgSimilarity` and `minSimilarity` (lowest pairwise). the report/dupes output surfaces min as a confidence tier (high >= 90%, solid >= 80%, loose < 80%) so a low-min "loose" cluster gets eyeballed before anything is closed. for very large clusters (> 100 pairs) min is a sampled lower-bound estimate
 
 ## database
 
