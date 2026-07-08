@@ -199,6 +199,33 @@ describe("findDuplicateClusters", () => {
     store.close();
   });
 
+  it("det-exact-pairwise: avg/min similarity are deterministic across runs for a >100-pair cluster", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    // 16 members at 1-degree steps: every pairwise cos >= cos(15deg)=0.966, so they
+    // form one cluster; 16*15/2 = 120 pairs > the old MAX_PAIRS=100, which is exactly
+    // the branch that sampled pairs with Math.random() and drifted per run.
+    const items: PRItem[] = [];
+    for (let k = 0; k < 16; k++) {
+      const rad = (k * Math.PI) / 180;
+      const v = new Float32Array([Math.cos(rad), Math.sin(rad), 0, 0]);
+      const pr = makePR(k + 1, `item ${k}`);
+      items.push(pr);
+      store.upsert(storeItem(pr, v));
+    }
+
+    const run1 = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    const run2 = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    expect(run1.length).toBe(1);
+    expect(run1[0].items.length).toBe(16);
+    // Exact computation must give byte-identical avg/min on every run.
+    expect(run1[0].avgSimilarity).toBe(run2[0].avgSimilarity);
+    expect(run1[0].minSimilarity).toBe(run2[0].minSimilarity);
+    store.close();
+  });
+
   it("single item — no cluster formed", () => {
     const path = tmpDb();
     dbs.push(path);
