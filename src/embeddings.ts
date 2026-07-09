@@ -223,6 +223,16 @@ export async function createEmbeddingProvider(config: ProviderConfig): Promise<E
   }
 }
 
+// Bump whenever prepareEmbeddingText's output format changes. It's folded into
+// the embedding config hash so a format change invalidates cached embeddings and
+// the scan warns to re-embed, instead of silently mixing old and new text vectors.
+// v1: "Pull Request:"/"Issue:" type prefix. v2: no prefix.
+export const EMBEDDING_TEXT_VERSION = 2;
+
+export function embeddingConfigHash(provider: string, model: string, dimensions: number): string {
+  return `${provider}:${model}:${dimensions}:t${EMBEDDING_TEXT_VERSION}`;
+}
+
 export function prepareEmbeddingText(item: { title: string; body: string; type: string }): string {
   // No type prefix. A leading "Pull Request:" / "Issue:" token systematically
   // pushes an issue away from its own fix PR in embedding space, which fragments

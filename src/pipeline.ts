@@ -5,7 +5,7 @@ import Table from "cli-table3";
 import ora from "ora";
 import { findDuplicateClusters } from "./cluster.js";
 import { getRepos, getVisionDoc, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
-import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
+import { createEmbeddingProvider, embeddingConfigHash, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { applyLabelActions, ensureLabelsExist, type LabelAction } from "./labels.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
@@ -180,8 +180,9 @@ export async function runScan(
   // Embed and store
   const { embedder } = ctx;
 
-  // Store/update embedding metadata on every scan
-  const configHash = `${env.EMBEDDING_PROVIDER}:${env.EMBEDDING_MODEL}:${embedder.dimensions}`;
+  // Store/update embedding metadata on every scan. The hash includes the
+  // embed-text format version, so changing prepareEmbeddingText trips the warning.
+  const configHash = embeddingConfigHash(env.EMBEDDING_PROVIDER, env.EMBEDDING_MODEL, embedder.dimensions);
   const storedHash = store.getMeta("embedding_config_hash");
   if (storedHash && storedHash !== configHash && newItems.length > 0) {
     console.log(

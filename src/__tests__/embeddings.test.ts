@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { prepareEmbeddingText } from "../embeddings.js";
+import { EMBEDDING_TEXT_VERSION, embeddingConfigHash, prepareEmbeddingText } from "../embeddings.js";
 
 describe("prepareEmbeddingText", () => {
   it("formats title and body without a type prefix", () => {
@@ -29,5 +29,20 @@ describe("prepareEmbeddingText", () => {
   it("handles null-ish title", () => {
     const result = prepareEmbeddingText({ title: "", body: "body", type: "pr" });
     expect(result).toContain("Untitled");
+  });
+});
+
+describe("embeddingConfigHash", () => {
+  it("folds in the text-format version so an embed-text change invalidates cached embeddings", () => {
+    // pre-guard DBs stored the bare provider:model:dims hash; a text change like
+    // dropping the type prefix must now mismatch it so the scan warns to reset.
+    const legacy = "ollama:nomic-embed-text:768";
+    const now = embeddingConfigHash("ollama", "nomic-embed-text", 768);
+    expect(now).not.toBe(legacy);
+    expect(now).toContain(`:t${EMBEDDING_TEXT_VERSION}`);
+  });
+
+  it("stays stable for the same provider/model/dims/version", () => {
+    expect(embeddingConfigHash("jina", "jina-v3", 1024)).toBe(embeddingConfigHash("jina", "jina-v3", 1024));
   });
 });
