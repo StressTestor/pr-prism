@@ -460,6 +460,9 @@ program
             threshold,
             generatedAt: new Date().toISOString(),
             embeddingModel: ctx.store.getMeta("embedding_model") ?? "unknown",
+            embeddingProvider: ctx.store.getMeta("embedding_provider") ?? "unknown",
+            embeddingDimensions: Number(ctx.store.getMeta("embedding_dimensions") ?? 0),
+            embeddingConfigHash: ctx.store.getMeta("embedding_config_hash") ?? "unknown",
           });
           writeFileSync(opts.starmap, `${JSON.stringify(payload, null, 2)}\n`);
           console.log(chalk.green(`★ star-map JSON written to ${opts.starmap} (${payload.clusterCount} clusters)`));

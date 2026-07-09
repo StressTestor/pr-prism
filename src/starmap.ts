@@ -50,6 +50,11 @@ export interface StarmapPayload {
   /** Embedding model the snapshot was built with. Similarity thresholds are not
    * portable across models, so consumers should only compare same-model runs. */
   embeddingModel: string;
+  embeddingProvider: string;
+  embeddingDimensions: number;
+  /** provider:model:dims:textVersion — fully identifies the embedding space so
+   * consumers can tell two snapshots apart without guessing from the model name. */
+  embeddingConfigHash: string;
   threshold: number;
   totalItems: number;
   clusterCount: number;
@@ -61,6 +66,9 @@ export interface StarmapMeta {
   threshold: number;
   generatedAt: string;
   embeddingModel: string;
+  embeddingProvider: string;
+  embeddingDimensions: number;
+  embeddingConfigHash: string;
 }
 
 export function confidenceTier(minSimilarity: number): Confidence {
@@ -119,6 +127,9 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
     repo: meta.repo,
     generatedAt: meta.generatedAt,
     embeddingModel: meta.embeddingModel,
+    embeddingProvider: meta.embeddingProvider,
+    embeddingDimensions: meta.embeddingDimensions,
+    embeddingConfigHash: meta.embeddingConfigHash,
     threshold: meta.threshold,
     totalItems: clusters.reduce((sum, c) => sum + c.items.length, 0),
     clusterCount: clusters.length,

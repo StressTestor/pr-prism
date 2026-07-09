@@ -37,6 +37,9 @@ const META = {
   threshold: 0.95,
   generatedAt: "2026-07-08T23:02:32.355Z",
   embeddingModel: "nomic-embed-text-v2-moe",
+  embeddingProvider: "ollama",
+  embeddingDimensions: 768,
+  embeddingConfigHash: "ollama:nomic-embed-text-v2-moe:768:t2",
 };
 
 describe("buildStarmapPayload", () => {
@@ -46,6 +49,9 @@ describe("buildStarmapPayload", () => {
     expect(p.schemaVersion).toBe(1);
     expect(p.repo).toBe("acme/widgets");
     expect(p.embeddingModel).toBe("nomic-embed-text-v2-moe");
+    expect(p.embeddingProvider).toBe("ollama");
+    expect(p.embeddingDimensions).toBe(768);
+    expect(p.embeddingConfigHash).toBe("ollama:nomic-embed-text-v2-moe:768:t2");
     expect(p.threshold).toBe(0.95);
     expect(p.generatedAt).toBe("2026-07-08T23:02:32.355Z");
     expect(p.totalItems).toBe(2);
