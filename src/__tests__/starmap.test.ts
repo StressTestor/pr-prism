@@ -76,12 +76,7 @@ describe("buildStarmapPayload", () => {
   });
 
   it("carries the GitHub node id through to refs/items when present, omits it when absent", () => {
-    const c = cluster(
-      1,
-      [item(1, "pr", 0.6, { nodeId: "PR_kwDO123" }), item(2, "issue", 0.5)],
-      0.93,
-      0.9,
-    );
+    const c = cluster(1, [item(1, "pr", 0.6, { nodeId: "PR_kwDO123" }), item(2, "issue", 0.5)], 0.93, 0.9);
     const out = buildStarmapPayload([c], META).clusters[0];
     expect(out.canonical.nodeId).toBe("PR_kwDO123");
     expect(out.items.find((i) => i.number === 1)!.nodeId).toBe("PR_kwDO123");

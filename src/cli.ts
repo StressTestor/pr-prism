@@ -385,7 +385,10 @@ program
   .option("--dry-run", "Show what would be labeled without applying")
   .option("--json", "Output results as NDJSON")
   .option("--output <format>", "Output format: markdown")
-  .option("--starmap <path>", "Also write a stable star-map JSON contract (clusters + confidence + join keys) to <path>")
+  .option(
+    "--starmap <path>",
+    "Also write a stable star-map JSON contract (clusters + confidence + join keys) to <path>",
+  )
   .action(async (opts) => {
     if (opts.json && opts.output) {
       console.error(chalk.red("Cannot use --json and --output together"));

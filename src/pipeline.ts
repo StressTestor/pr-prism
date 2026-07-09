@@ -593,7 +593,7 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number; explai
         (s.authorHistory * weights.author_history).toFixed(2),
         (s.descriptionQuality * weights.description_quality).toFixed(2),
         (s.reviewApprovals * weights.review_approvals).toFixed(2),
-        (s.recency * 0.05).toFixed(2),
+        ((s.recency ?? 0) * 0.05).toFixed(2),
         pr.score.toFixed(2),
       ]);
     }

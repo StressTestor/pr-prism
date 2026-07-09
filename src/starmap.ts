@@ -1,4 +1,4 @@
-import type { Cluster, ScoredPR } from "./types.js";
+import type { Cluster } from "./types.js";
 
 // Machine-readable "star map" contract: a stable JSON shape for downstream
 // visualizers/consumers that today scrape the Markdown report. Exposes the
@@ -73,13 +73,7 @@ function itemUrl(repo: string, type: "pr" | "issue", number: number): string {
   return `https://github.com/${repo}/${type === "pr" ? "pull" : "issues"}/${number}`;
 }
 
-function toRef(item: StarmapItem): StarmapItemRef {
-  const r: StarmapItemRef = { repo: item.repo, number: item.number, type: item.type, url: item.url };
-  if (item.nodeId) r.nodeId = item.nodeId;
-  return r;
-}
-
-function ref(item: ScoredPR): StarmapItemRef {
+function ref(item: { repo: string; number: number; type: "pr" | "issue"; nodeId?: string }): StarmapItemRef {
   const r: StarmapItemRef = {
     repo: item.repo,
     number: item.number,
@@ -113,8 +107,8 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
       contested: runnerUpMargin != null && runnerUpMargin < TIE_MARGIN,
       runnerUpMargin,
       partition: {
-        issues: items.filter((i) => i.type === "issue").map(toRef),
-        prs: items.filter((i) => i.type === "pr").map(toRef),
+        issues: items.filter((i) => i.type === "issue").map(ref),
+        prs: items.filter((i) => i.type === "pr").map(ref),
       },
       items,
     };

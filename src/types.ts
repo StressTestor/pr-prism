@@ -33,7 +33,8 @@ export interface ScoreSignals {
   authorHistory: number;
   descriptionQuality: number;
   reviewApprovals: number;
-  recency: number;
+  /** Only set by the ranked scorer; the clustering scorer omits it. */
+  recency?: number;
 }
 
 export interface Cluster {

@@ -1,18 +1,10 @@
+import { DEFAULT_SCORING_WEIGHTS } from "./config.js";
 import { normalizeDescriptionQuality, normalizeDiffSize } from "./scorer.js";
 import { cosineSimilarity, isZeroVector } from "./similarity.js";
 import type { VectorStore } from "./store.js";
 import type { Cluster, PRItem, ScoredPR, ScoreSignals } from "./types.js";
 
 export { cosineSimilarity } from "./similarity.js";
-
-const MS_PER_30_DAYS = 1000 * 60 * 60 * 24 * 30;
-
-// Recency relative to the newest item in the cluster (not Date.now), so cluster
-// scores are reproducible across runs. Newest item = 1.0, older items decay.
-function relativeRecency(updatedAt: string, newestMs: number): number {
-  const ageMs = newestMs - new Date(updatedAt).getTime();
-  return 0.5 ** (ageMs / MS_PER_30_DAYS);
-}
 
 export interface ClusterOptions {
   threshold: number;
@@ -182,13 +174,6 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
   for (const component of refinedComponents) {
     if (component.length < 2) continue;
 
-    const newestMs = Math.max(
-      ...component.map((cid) => {
-        const it = itemMap.get(cid);
-        return it ? new Date(it.updatedAt).getTime() : Number.NEGATIVE_INFINITY;
-      }),
-    );
-
     const clusterItems: ScoredPR[] = component
       .map((cid) => {
         const item = itemMap.get(cid);
@@ -199,24 +184,26 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
         const reviewApprovals = Math.min(1.0, (item.reviewCount || 0) / 3);
         const hasDiff = item.additions != null && item.deletions != null;
         const diffSize = hasDiff ? normalizeDiffSize(item.additions || 0, item.deletions || 0) : 0.5;
+        const authorHistory = 0.5; // no GitHub context available in clustering
         const signals: ScoreSignals = {
           hasTests,
           ciPassing,
           diffSize: hasDiff ? diffSize : -1,
-          authorHistory: 0.5, // no GitHub context available in clustering
+          authorHistory,
           descriptionQuality: descQuality,
           reviewApprovals,
-          recency: relativeRecency(item.updatedAt, newestMs),
         };
-        // Canonical pick is the highest-quality item; recency is reported as a
-        // signal but deliberately not scored, so the pick is reproducible and
-        // not biased toward whichever duplicate was touched most recently.
+        // Quality-only, using the shared weights so the pick is reproducible and
+        // stays aligned with the ranked scorer. Recency is deliberately not
+        // scored, so canonical isn't biased toward the most recently touched dup.
+        const w = DEFAULT_SCORING_WEIGHTS;
         const score =
-          hasTests * 0.28 +
-          ciPassing * 0.22 +
-          diffSize * 0.17 +
-          descQuality * 0.18 +
-          reviewApprovals * 0.15;
+          hasTests * w.has_tests +
+          ciPassing * w.ci_passing +
+          diffSize * w.diff_size_penalty +
+          descQuality * w.description_quality +
+          reviewApprovals * w.review_approvals +
+          authorHistory * w.author_history;
         return { ...item, score, signals } as ScoredPR;
       })
       .filter((x): x is ScoredPR => x !== null)

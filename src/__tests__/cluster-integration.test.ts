@@ -249,8 +249,26 @@ describe("findDuplicateClusters", () => {
     expect(Math.min(...byId[0].items.map((i) => i.number))).toBe(2);
     expect(Math.min(...byId[1].items.map((i) => i.number))).toBe(10);
     // and stable across runs
-    expect(run2.map((c) => c.id + ":" + c.items.map((i) => i.number).sort().join(","))).toEqual(
-      run1.map((c) => c.id + ":" + c.items.map((i) => i.number).sort().join(",")),
+    expect(
+      run2.map(
+        (c) =>
+          c.id +
+          ":" +
+          c.items
+            .map((i) => i.number)
+            .sort()
+            .join(","),
+      ),
+    ).toEqual(
+      run1.map(
+        (c) =>
+          c.id +
+          ":" +
+          c.items
+            .map((i) => i.number)
+            .sort()
+            .join(","),
+      ),
     );
     store.close();
   });

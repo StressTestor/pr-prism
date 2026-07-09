@@ -113,7 +113,7 @@ export function scorePR(item: PRItem, config: PrismConfig, context: ScorerContex
     signals.authorHistory * effectiveWeights.author_history +
     signals.descriptionQuality * effectiveWeights.description_quality +
     signals.reviewApprovals * effectiveWeights.review_approvals +
-    signals.recency * 0.05; // small recency bonus
+    (signals.recency ?? 0) * 0.05; // small recency bonus
 
   return { ...item, score, signals };
 }
