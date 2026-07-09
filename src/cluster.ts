@@ -132,27 +132,44 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
       }
     }
 
+    // Re-absorb ejected items that still have a direct >= threshold edge to a
+    // kept member. They are genuine duplicates pulling the centroid off-center,
+    // not chain outliers, and dropping them is how legitimate members vanished
+    // (e.g. issue #5297). Edges are checked against the original kept core so a
+    // re-absorbed item can't cascade in more.
+    const originalKept = [...kept];
+    const trulyEjected: string[] = [];
+    for (const eid of ejected) {
+      const emb = embeddings.get(eid)!;
+      const linkedToKept = originalKept.some((kid) => cosineSimilarity(emb, embeddings.get(kid)!) >= opts.threshold);
+      if (linkedToKept) {
+        kept.push(eid);
+      } else {
+        trulyEjected.push(eid);
+      }
+    }
+
     if (kept.length >= 2) {
       refinedComponents.push(kept);
     }
 
-    // Re-cluster ejected items among themselves (they might form smaller coherent groups)
-    if (ejected.length >= 2) {
+    // Re-cluster the remaining chain-outlier items among themselves.
+    if (trulyEjected.length >= 2) {
       const ejectedAdj = new Map<string, Set<string>>();
-      for (let i = 0; i < ejected.length; i++) {
-        for (let j = i + 1; j < ejected.length; j++) {
-          const sim = cosineSimilarity(embeddings.get(ejected[i])!, embeddings.get(ejected[j])!);
+      for (let i = 0; i < trulyEjected.length; i++) {
+        for (let j = i + 1; j < trulyEjected.length; j++) {
+          const sim = cosineSimilarity(embeddings.get(trulyEjected[i])!, embeddings.get(trulyEjected[j])!);
           if (sim >= opts.threshold) {
-            if (!ejectedAdj.has(ejected[i])) ejectedAdj.set(ejected[i], new Set());
-            if (!ejectedAdj.has(ejected[j])) ejectedAdj.set(ejected[j], new Set());
-            ejectedAdj.get(ejected[i])!.add(ejected[j]);
-            ejectedAdj.get(ejected[j])!.add(ejected[i]);
+            if (!ejectedAdj.has(trulyEjected[i])) ejectedAdj.set(trulyEjected[i], new Set());
+            if (!ejectedAdj.has(trulyEjected[j])) ejectedAdj.set(trulyEjected[j], new Set());
+            ejectedAdj.get(trulyEjected[i])!.add(trulyEjected[j]);
+            ejectedAdj.get(trulyEjected[j])!.add(trulyEjected[i]);
           }
         }
       }
-      // BFS on ejected items
+      // BFS on the chain-outlier items
       const ejVisited = new Set<string>();
-      for (const eid of ejected) {
+      for (const eid of trulyEjected) {
         if (ejVisited.has(eid) || !ejectedAdj.has(eid)) continue;
         const subComp: string[] = [];
         const q = [eid];

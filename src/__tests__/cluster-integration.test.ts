@@ -293,6 +293,31 @@ describe("findDuplicateClusters", () => {
     store.close();
   });
 
+  it("recall-centroid-keep: a centroid-ejected member still edge-linked to the core is kept, not dropped", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    // chain A(0deg)-B(25)-C(50) plus D(-25) linked to A. The 4-member centroid
+    // sits at ~12.5deg and ejects the endpoints C and D (~37.5deg away, cos 0.79
+    // < 0.85). But C edges B and D edges A (cos 25 = 0.906 >= 0.85), so both are
+    // real members pulling the centroid, not chain outliers — none may be dropped.
+    const A = new Float32Array([1, 0, 0, 0]);
+    const B = new Float32Array([0.9063, 0.4226, 0, 0]);
+    const C = new Float32Array([0.6428, 0.766, 0, 0]);
+    const D = new Float32Array([0.9063, -0.4226, 0, 0]);
+    const items = [makePR(1, "A"), makePR(2, "B"), makePR(3, "C"), makePR(4, "D")];
+    store.upsert(storeItem(items[0], A));
+    store.upsert(storeItem(items[1], B));
+    store.upsert(storeItem(items[2], C));
+    store.upsert(storeItem(items[3], D));
+
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    expect(clusters.length).toBe(1);
+    expect(clusters[0].items.length).toBe(4);
+    store.close();
+  });
+
   it("single item — no cluster formed", () => {
     const path = tmpDb();
     dbs.push(path);
