@@ -146,6 +146,7 @@ export class GitHubClient {
                 totalCount
                 pageInfo { hasNextPage endCursor }
                 nodes {
+                  id
                   number
                   title
                   body
@@ -216,6 +217,7 @@ export class GitHubClient {
           state: pr.state.toLowerCase(),
           author: pr.author?.login || "unknown",
           createdAt: pr.createdAt,
+          nodeId: pr.id,
           updatedAt: pr.updatedAt,
           labels: (pr.labels?.nodes || []).map((l: any) => l.name),
           additions: pr.additions,
@@ -254,6 +256,7 @@ export class GitHubClient {
                 totalCount
                 pageInfo { hasNextPage endCursor }
                 nodes {
+                  id
                   number
                   title
                   body
@@ -298,6 +301,7 @@ export class GitHubClient {
           state: issue.state.toLowerCase(),
           author: issue.author?.login || "unknown",
           createdAt: issue.createdAt,
+          nodeId: issue.id,
           updatedAt: issue.updatedAt,
           labels: (issue.labels?.nodes || []).map((l: any) => l.name),
         });
@@ -372,6 +376,7 @@ export class GitHubClient {
           state: pr.state,
           author: pr.user?.login || "unknown",
           createdAt: pr.created_at,
+          nodeId: pr.node_id,
           updatedAt: pr.updated_at,
           labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name || "")),
           diffUrl: pr.diff_url,
@@ -427,6 +432,7 @@ export class GitHubClient {
           state: issue.state,
           author: issue.user?.login || "unknown",
           createdAt: issue.created_at,
+          nodeId: issue.node_id,
           updatedAt: issue.updated_at,
           labels: issue.labels.map((l) => (typeof l === "string" ? l : l.name || "")),
         });
@@ -451,6 +457,7 @@ export class GitHubClient {
     const pr = response.data;
     return {
       number: pr.number,
+      nodeId: pr.node_id,
       type: "pr",
       repo: `${this.owner}/${this.repo}`,
       title: pr.title,

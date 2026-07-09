@@ -271,6 +271,7 @@ export class VectorStore {
         ciStatus: metadata.ciStatus,
         reviewCount: metadata.reviewCount,
         hasTests: metadata.hasTests,
+        nodeId: metadata.nodeId,
         body: row.body_snippet,
       };
     });
@@ -319,6 +320,7 @@ export class VectorStore {
         ciStatus: metadata.ciStatus,
         reviewCount: metadata.reviewCount,
         hasTests: metadata.hasTests,
+        nodeId: metadata.nodeId,
         body: row.body_snippet,
       } as StoreItem;
     });

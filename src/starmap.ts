@@ -17,6 +17,8 @@ export interface StarmapItemRef {
   number: number;
   type: "pr" | "issue";
   url: string;
+  /** GitHub node id; present only when the scan fetched it. */
+  nodeId?: string;
 }
 
 export interface StarmapItem extends StarmapItemRef {
@@ -45,6 +47,9 @@ export interface StarmapPayload {
   schemaVersion: number;
   repo: string;
   generatedAt: string;
+  /** Embedding model the snapshot was built with. Similarity thresholds are not
+   * portable across models, so consumers should only compare same-model runs. */
+  embeddingModel: string;
   threshold: number;
   totalItems: number;
   clusterCount: number;
@@ -55,6 +60,7 @@ export interface StarmapMeta {
   repo: string;
   threshold: number;
   generatedAt: string;
+  embeddingModel: string;
 }
 
 export function confidenceTier(minSimilarity: number): Confidence {
@@ -67,8 +73,21 @@ function itemUrl(repo: string, type: "pr" | "issue", number: number): string {
   return `https://github.com/${repo}/${type === "pr" ? "pull" : "issues"}/${number}`;
 }
 
+function toRef(item: StarmapItem): StarmapItemRef {
+  const r: StarmapItemRef = { repo: item.repo, number: item.number, type: item.type, url: item.url };
+  if (item.nodeId) r.nodeId = item.nodeId;
+  return r;
+}
+
 function ref(item: ScoredPR): StarmapItemRef {
-  return { repo: item.repo, number: item.number, type: item.type, url: itemUrl(item.repo, item.type, item.number) };
+  const r: StarmapItemRef = {
+    repo: item.repo,
+    number: item.number,
+    type: item.type,
+    url: itemUrl(item.repo, item.type, item.number),
+  };
+  if (item.nodeId) r.nodeId = item.nodeId;
+  return r;
 }
 
 export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): StarmapPayload {
@@ -94,8 +113,8 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
       contested: runnerUpMargin != null && runnerUpMargin < TIE_MARGIN,
       runnerUpMargin,
       partition: {
-        issues: items.filter((i) => i.type === "issue").map((i) => ({ repo: i.repo, number: i.number, type: i.type, url: i.url })),
-        prs: items.filter((i) => i.type === "pr").map((i) => ({ repo: i.repo, number: i.number, type: i.type, url: i.url })),
+        issues: items.filter((i) => i.type === "issue").map(toRef),
+        prs: items.filter((i) => i.type === "pr").map(toRef),
       },
       items,
     };
@@ -105,6 +124,7 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
     schemaVersion: STARMAP_SCHEMA_VERSION,
     repo: meta.repo,
     generatedAt: meta.generatedAt,
+    embeddingModel: meta.embeddingModel,
     threshold: meta.threshold,
     totalItems: clusters.reduce((sum, c) => sum + c.items.length, 0),
     clusterCount: clusters.length,

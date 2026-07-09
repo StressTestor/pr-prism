@@ -255,6 +255,26 @@ describe("findDuplicateClusters", () => {
     store.close();
   });
 
+  it("cluster score is time-independent: recency is a signal, not scored", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    const emb = new Float32Array([1, 1, 1, 1]);
+    // identical in every scored signal, differ only in updatedAt (recency).
+    const old = { ...makePR(1, "same"), updatedAt: "2020-01-01T00:00:00Z" };
+    const fresh = { ...makePR(2, "same"), updatedAt: "2026-07-01T00:00:00Z" };
+    store.upsert(storeItem(old, emb));
+    store.upsert(storeItem(fresh, emb));
+
+    const clusters = findDuplicateClusters(store, [old, fresh], { threshold: 0.85, repo: "test/repo" });
+    expect(clusters.length).toBe(1);
+    const scores = clusters[0].items.map((i) => i.score);
+    // recency was the only difference; if it were scored these would diverge.
+    expect(scores[0]).toBe(scores[1]);
+    store.close();
+  });
+
   it("single item — no cluster formed", () => {
     const path = tmpDb();
     dbs.push(path);

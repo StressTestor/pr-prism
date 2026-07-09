@@ -1,5 +1,7 @@
 export interface PRItem {
   number: number;
+  /** GitHub GraphQL/REST node id; present when the scan fetched it. */
+  nodeId?: string;
   type: "pr" | "issue";
   repo: string;
   title: string;

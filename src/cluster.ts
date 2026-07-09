@@ -5,10 +5,13 @@ import type { Cluster, PRItem, ScoredPR, ScoreSignals } from "./types.js";
 
 export { cosineSimilarity } from "./similarity.js";
 
-function recencyFactor(updatedAt: string): number {
-  const ageMs = Date.now() - new Date(updatedAt).getTime();
-  const ageDays = ageMs / (1000 * 60 * 60 * 24);
-  return 0.5 ** (ageDays / 30);
+const MS_PER_30_DAYS = 1000 * 60 * 60 * 24 * 30;
+
+// Recency relative to the newest item in the cluster (not Date.now), so cluster
+// scores are reproducible across runs. Newest item = 1.0, older items decay.
+function relativeRecency(updatedAt: string, newestMs: number): number {
+  const ageMs = newestMs - new Date(updatedAt).getTime();
+  return 0.5 ** (ageMs / MS_PER_30_DAYS);
 }
 
 export interface ClusterOptions {
@@ -179,11 +182,17 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
   for (const component of refinedComponents) {
     if (component.length < 2) continue;
 
+    const newestMs = Math.max(
+      ...component.map((cid) => {
+        const it = itemMap.get(cid);
+        return it ? new Date(it.updatedAt).getTime() : Number.NEGATIVE_INFINITY;
+      }),
+    );
+
     const clusterItems: ScoredPR[] = component
       .map((cid) => {
         const item = itemMap.get(cid);
         if (!item) return null;
-        const recency = recencyFactor(item.updatedAt);
         const hasTests = item.hasTests === true ? 1.0 : item.hasTests === false ? 0.0 : 0.5;
         const ciPassing = item.ciStatus === "success" ? 1 : item.ciStatus === "failure" ? 0 : 0.5;
         const descQuality = normalizeDescriptionQuality(item.body || "", (item.body || "").length);
@@ -197,15 +206,17 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
           authorHistory: 0.5, // no GitHub context available in clustering
           descriptionQuality: descQuality,
           reviewApprovals,
-          recency,
+          recency: relativeRecency(item.updatedAt, newestMs),
         };
+        // Canonical pick is the highest-quality item; recency is reported as a
+        // signal but deliberately not scored, so the pick is reproducible and
+        // not biased toward whichever duplicate was touched most recently.
         const score =
-          hasTests * 0.25 +
-          ciPassing * 0.2 +
-          diffSize * 0.15 +
-          descQuality * 0.15 +
-          reviewApprovals * 0.1 +
-          recency * 0.15;
+          hasTests * 0.28 +
+          ciPassing * 0.22 +
+          diffSize * 0.17 +
+          descQuality * 0.18 +
+          reviewApprovals * 0.15;
         return { ...item, score, signals } as ScoredPR;
       })
       .filter((x): x is ScoredPR => x !== null)

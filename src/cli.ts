@@ -25,7 +25,7 @@ import {
 import { reviewPR } from "./reviewer.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
 import { cosineSimilarity } from "./similarity.js";
-import { buildStarmapPayload } from "./starmap.js";
+import { buildStarmapPayload, confidenceTier } from "./starmap.js";
 import { VectorStore } from "./store.js";
 import type { PRItem } from "./types.js";
 import { checkVisionAlignment } from "./vision.js";
@@ -456,6 +456,7 @@ program
             repo: isMultiRepo ? repos.join(", ") : ctx.repoFull,
             threshold,
             generatedAt: new Date().toISOString(),
+            embeddingModel: ctx.store.getMeta("embedding_model") ?? "unknown",
           });
           writeFileSync(opts.starmap, `${JSON.stringify(payload, null, 2)}\n`);
           console.log(chalk.green(`★ star-map JSON written to ${opts.starmap} (${payload.clusterCount} clusters)`));
@@ -1092,7 +1093,8 @@ program
     for (const cluster of clusters.slice(0, clusterN)) {
       const theme = cluster.theme.replace(/\|/g, "\\|").slice(0, 60);
       const minPct = cluster.minSimilarity * 100;
-      const confidence = minPct >= 90 ? "high" : minPct >= 80 ? "solid" : "loose ⚠";
+      const tier = confidenceTier(cluster.minSimilarity);
+      const confidence = tier === "loose" ? "loose ⚠" : tier;
       // Source of truth selection:
       // - For issue-majority clusters: earliest open date first (canonical first report),
       //   then description quality, then most discussion
