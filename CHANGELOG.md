@@ -2,6 +2,14 @@
 
 all notable changes to pr-prism are documented here.
 
+## [2.0.1] — 2026-07-09
+
+### changed
+- clean, actionable CLI error messages instead of raw stack traces on failures
+
+### docs
+- add ARCHITECTURE.md
+
 ## [2.0.0] — 2026-03-19
 
 ### added
