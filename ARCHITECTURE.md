@@ -33,6 +33,7 @@ src/                    # CLI tool (published to npm as prism-triage)
   cluster.ts            # cosine similarity, BFS clustering, duplicate detection
   similarity.ts         # ANN pre-filtering, matryoshka truncation
   scorer.ts             # 7 quality signals: tests, CI, diff size, author history, etc.
+  starmap.ts            # stable star-map JSON contract: clusters + minSim/confidence/partition/contested + (repo,number) join key
   vision.ts             # chunked vision doc embedding, alignment scoring
   reviewer.ts           # multi-provider LLM review
   labels.ts             # GitHub label management with rate limiting

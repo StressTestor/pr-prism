@@ -25,6 +25,7 @@ import {
 import { reviewPR } from "./reviewer.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
 import { cosineSimilarity } from "./similarity.js";
+import { buildStarmapPayload } from "./starmap.js";
 import { VectorStore } from "./store.js";
 import type { PRItem } from "./types.js";
 import { checkVisionAlignment } from "./vision.js";
@@ -384,6 +385,7 @@ program
   .option("--dry-run", "Show what would be labeled without applying")
   .option("--json", "Output results as NDJSON")
   .option("--output <format>", "Output format: markdown")
+  .option("--starmap <path>", "Also write a stable star-map JSON contract (clusters + confidence + join keys) to <path>")
   .action(async (opts) => {
     if (opts.json && opts.output) {
       console.error(chalk.red("Cannot use --json and --output together"));
@@ -431,22 +433,32 @@ program
           );
         }
       } else {
-        if (isMultiRepo) {
-          await runDupesMulti(ctx, repos, {
-            threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
-            applyLabels: opts.applyLabels,
-            dryRun: opts.dryRun,
-            json: opts.json,
-            output: opts.output,
+        const clusters = isMultiRepo
+          ? await runDupesMulti(ctx, repos, {
+              threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
+              applyLabels: opts.applyLabels,
+              dryRun: opts.dryRun,
+              json: opts.json,
+              output: opts.output,
+            })
+          : await runDupes(ctx, {
+              threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
+              applyLabels: opts.applyLabels,
+              dryRun: opts.dryRun,
+              json: opts.json,
+              output: opts.output,
+            });
+
+        if (opts.starmap) {
+          const threshold =
+            opts.threshold !== undefined ? parseFloat(opts.threshold) : ctx.config.thresholds.duplicate_similarity;
+          const payload = buildStarmapPayload(clusters, {
+            repo: isMultiRepo ? repos.join(", ") : ctx.repoFull,
+            threshold,
+            generatedAt: new Date().toISOString(),
           });
-        } else {
-          await runDupes(ctx, {
-            threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
-            applyLabels: opts.applyLabels,
-            dryRun: opts.dryRun,
-            json: opts.json,
-            output: opts.output,
-          });
+          writeFileSync(opts.starmap, `${JSON.stringify(payload, null, 2)}\n`);
+          console.log(chalk.green(`★ star-map JSON written to ${opts.starmap} (${payload.clusterCount} clusters)`));
         }
       }
     } finally {
