@@ -38,6 +38,7 @@ src/                    # CLI tool (published to npm as prism-triage)
   sanitize.ts           # title/theme emit sanitizer: strip control/ANSI, escape markdown table cells (row-injection defense)
   scorer.ts             # 7 quality signals: tests, CI, diff size, author history, etc.
   starmap.ts            # stable star-map JSON contract: clusters + minSim/confidence/partition/contested+runnerUp + tracker(original bug + fix/duplicate candidates) + item state (open/closed/merged) + embeddingModel/provider/dims/configHash + node ids + (repo,number) join key
+  housekeeping.ts       # editable markdown manifest: tracker + paste-ready close checklist + loose-as-buckets (no auto-writes)
   vision.ts             # chunked vision doc embedding, alignment scoring
   reviewer.ts           # multi-provider LLM review
   labels.ts             # GitHub label management with rate limiting
