@@ -201,4 +201,39 @@ describe("buildStarmapPayload", () => {
     expect(out.theme).not.toContain(ESC); // theme derives from the evil title
     expect(() => JSON.parse(JSON.stringify(out))).not.toThrow();
   });
+
+  it("places confirmed identity clusters first with confirmed+identity; fuzzy stay fuzzy", () => {
+    const fuzzy = cluster(1, [item(1, "pr", 0.6), item(2, "pr", 0.5)], 0.85, 0.82);
+    const confirmed: Cluster = {
+      id: 0,
+      items: [item(11, "pr", 0.4), item(10, "pr", 0.9)],
+      bestPick: item(10, "pr", 0.9),
+      avgSimilarity: 1,
+      minSimilarity: 1,
+      theme: "confirmed dup",
+      kind: "identity",
+      identity: { basis: "head-oid", key: "abc123" },
+    };
+    const p = buildStarmapPayload([fuzzy], META, { confirmed: [confirmed] });
+    expect(p.clusterCount).toBe(2);
+    expect(p.totalItems).toBe(4);
+    // confirmed sits first
+    expect(p.clusters[0].confirmed).toBe(true);
+    expect(p.clusters[0].identity).toEqual({ basis: "head-oid", key: "abc123" });
+    expect(p.clusters[0].confidence).toBe("high"); // minSim 1
+    expect(p.clusters[0].index).toBe(0);
+    expect(p.clusters[0].id).toContain("-identity-");
+    // fuzzy below, unchanged
+    expect(p.clusters[1].confirmed).toBeUndefined();
+    expect(p.clusters[1].confidence).toBe("solid"); // minSim 0.82
+    expect(p.clusters[1].index).toBe(1);
+    expect(p.clusters[1].id).toContain("-cluster-");
+  });
+
+  it("without the confirmed opt, no cluster is marked confirmed", () => {
+    const c = cluster(3, [item(1, "pr", 0.6), item(2, "pr", 0.5)], 0.9, 0.85);
+    const p = buildStarmapPayload([c], META);
+    expect(p.clusters[0].confirmed).toBeUndefined();
+    expect(p.clusters[0].id).toContain("-cluster-3");
+  });
 });

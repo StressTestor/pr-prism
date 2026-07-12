@@ -14,6 +14,7 @@ import { confidenceTier } from "./confidence.js";
 import { getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
+import { findConfirmedDuplicates } from "./identity.js";
 import { applyEmbeddingKey, detectRepoFromGit, injectRepoIntoConfig, resolveInitRepo, verifyInit } from "./init.js";
 import {
   createPipelineContext,
@@ -519,15 +520,25 @@ program
         if (opts.starmap) {
           const threshold =
             opts.threshold !== undefined ? parseFloat(opts.threshold) : ctx.config.thresholds.duplicate_similarity;
-          const payload = buildStarmapPayload(clusters, {
-            repo: isMultiRepo ? repos.join(", ") : ctx.repoFull,
-            threshold,
-            generatedAt: new Date().toISOString(),
-            embeddingModel: ctx.store.getMeta("embedding_model") ?? "unknown",
-            embeddingProvider: ctx.store.getMeta("embedding_provider") ?? "unknown",
-            embeddingDimensions: Number(ctx.store.getMeta("embedding_dimensions") ?? 0),
-            embeddingConfigHash: ctx.store.getMeta("embedding_config_hash") ?? "unknown",
-          });
+          // Deterministic confirmed-duplicate tier (head-oid / patch-id), computed over
+          // ALL items - a confirmed pair need not have fuzzy-clustered - and surfaced first.
+          const allItems = (isMultiRepo
+            ? ctx.store.getAllItemsMulti(repos)
+            : ctx.store.getAllItems(ctx.repoFull)) as unknown as PRItem[];
+          const confirmed = findConfirmedDuplicates(allItems, { store: ctx.store });
+          const payload = buildStarmapPayload(
+            clusters,
+            {
+              repo: isMultiRepo ? repos.join(", ") : ctx.repoFull,
+              threshold,
+              generatedAt: new Date().toISOString(),
+              embeddingModel: ctx.store.getMeta("embedding_model") ?? "unknown",
+              embeddingProvider: ctx.store.getMeta("embedding_provider") ?? "unknown",
+              embeddingDimensions: Number(ctx.store.getMeta("embedding_dimensions") ?? 0),
+              embeddingConfigHash: ctx.store.getMeta("embedding_config_hash") ?? "unknown",
+            },
+            { confirmed },
+          );
           writeFileSync(opts.starmap, `${JSON.stringify(payload, null, 2)}\n`);
           console.log(chalk.green(`★ star-map JSON written to ${opts.starmap} (${payload.clusterCount} clusters)`));
         }

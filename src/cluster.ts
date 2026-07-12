@@ -12,6 +12,38 @@ export interface ClusterOptions {
   repo: string | string[];
 }
 
+/**
+ * Score a single item into a ScoredPR using the shared quality weights (no
+ * recency, so the pick is reproducible). Extracted so both the fuzzy clusterer
+ * and the confirmed-duplicate finder (identity.ts) score members identically.
+ */
+export function scoreClusterItem(item: PRItem): ScoredPR {
+  const hasTests = item.hasTests === true ? 1.0 : item.hasTests === false ? 0.0 : 0.5;
+  const ciPassing = item.ciStatus === "success" ? 1 : item.ciStatus === "failure" ? 0 : 0.5;
+  const descQuality = normalizeDescriptionQuality(item.body || "", (item.body || "").length);
+  const reviewApprovals = Math.min(1.0, (item.reviewCount || 0) / 3);
+  const hasDiff = item.additions != null && item.deletions != null;
+  const diffSize = hasDiff ? normalizeDiffSize(item.additions || 0, item.deletions || 0) : 0.5;
+  const authorHistory = 0.5; // no GitHub context available in clustering
+  const signals: ScoreSignals = {
+    hasTests,
+    ciPassing,
+    diffSize: hasDiff ? diffSize : -1,
+    authorHistory,
+    descriptionQuality: descQuality,
+    reviewApprovals,
+  };
+  const w = DEFAULT_SCORING_WEIGHTS;
+  const score =
+    hasTests * w.has_tests +
+    ciPassing * w.ci_passing +
+    diffSize * w.diff_size_penalty +
+    descQuality * w.description_quality +
+    reviewApprovals * w.review_approvals +
+    authorHistory * w.author_history;
+  return { ...item, score, signals } as ScoredPR;
+}
+
 export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts: ClusterOptions): Cluster[] {
   const repos = Array.isArray(opts.repo) ? opts.repo : [opts.repo];
   const allEmbeddings = repos.length === 1 ? store.getAllEmbeddings(repos[0]) : store.getAllEmbeddingsMulti(repos);
@@ -195,34 +227,7 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
     const clusterItems: ScoredPR[] = component
       .map((cid) => {
         const item = itemMap.get(cid);
-        if (!item) return null;
-        const hasTests = item.hasTests === true ? 1.0 : item.hasTests === false ? 0.0 : 0.5;
-        const ciPassing = item.ciStatus === "success" ? 1 : item.ciStatus === "failure" ? 0 : 0.5;
-        const descQuality = normalizeDescriptionQuality(item.body || "", (item.body || "").length);
-        const reviewApprovals = Math.min(1.0, (item.reviewCount || 0) / 3);
-        const hasDiff = item.additions != null && item.deletions != null;
-        const diffSize = hasDiff ? normalizeDiffSize(item.additions || 0, item.deletions || 0) : 0.5;
-        const authorHistory = 0.5; // no GitHub context available in clustering
-        const signals: ScoreSignals = {
-          hasTests,
-          ciPassing,
-          diffSize: hasDiff ? diffSize : -1,
-          authorHistory,
-          descriptionQuality: descQuality,
-          reviewApprovals,
-        };
-        // Quality-only, using the shared weights so the pick is reproducible and
-        // stays aligned with the ranked scorer. Recency is deliberately not
-        // scored, so canonical isn't biased toward the most recently touched dup.
-        const w = DEFAULT_SCORING_WEIGHTS;
-        const score =
-          hasTests * w.has_tests +
-          ciPassing * w.ci_passing +
-          diffSize * w.diff_size_penalty +
-          descQuality * w.description_quality +
-          reviewApprovals * w.review_approvals +
-          authorHistory * w.author_history;
-        return { ...item, score, signals } as ScoredPR;
+        return item ? scoreClusterItem(item) : null;
       })
       .filter((x): x is ScoredPR => x !== null)
       .sort((a, b) => b.score - a.score);

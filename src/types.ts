@@ -19,6 +19,8 @@ export interface PRItem {
   deletions?: number;
   changedFiles?: number;
   hasTests?: boolean;
+  /** PR head commit OID; two PRs on the same OID are a confirmed (non-fuzzy) duplicate. */
+  headRefOid?: string;
 }
 
 export interface ScoredPR extends PRItem {
@@ -50,6 +52,11 @@ export interface Cluster {
    */
   minSimilarity: number;
   theme: string;
+  /** "identity" = a deterministic confirmed duplicate (same head-oid / patch-id),
+   * not a fuzzy embedding match. Absent/"fuzzy" for ordinary similarity clusters. */
+  kind?: "identity" | "fuzzy";
+  /** For an identity cluster: what made it confirmed and the shared key. */
+  identity?: { basis: "head-oid" | "patch-id"; key: string };
 }
 
 export interface ReviewResult {
