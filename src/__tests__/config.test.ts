@@ -33,6 +33,11 @@ describe("parseRepo", () => {
     expect(parseRepo("https://github.com/octocat/hello-world.git")).toEqual({ owner: "octocat", repo: "hello-world" });
   });
 
+  it("parses the SSH scp form from a git remote", () => {
+    expect(parseRepo("git@github.com:octocat/hello-world.git")).toEqual({ owner: "octocat", repo: "hello-world" });
+    expect(parseRepo("git@github.com:octocat/hello-world")).toEqual({ owner: "octocat", repo: "hello-world" });
+  });
+
   it("rejects extra path segments", () => {
     expect(() => parseRepo("octocat/hello/world")).toThrow("invalid repo format");
   });
