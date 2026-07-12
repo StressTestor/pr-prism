@@ -16,12 +16,17 @@ import type { Cluster, PRItem } from "./types.js";
  * same change lands on a different base) and hash the rest. Not byte-identical
  * to `git patch-id`, but stable for "same change, different commits".
  */
-export function diffFingerprint(diff: string): string {
-  const normalized = diff
+/** Drop volatile index/hunk-range lines and trim; empty means the diff had no real content. */
+function normalizedDiffBody(diff: string): string {
+  return diff
     .split("\n")
     .filter((line) => !line.startsWith("index ") && !line.startsWith("@@"))
-    .join("\n");
-  return createHash("sha256").update(normalized).digest("hex");
+    .join("\n")
+    .trim();
+}
+
+export function diffFingerprint(diff: string): string {
+  return createHash("sha256").update(normalizedDiffBody(diff)).digest("hex");
 }
 
 function itemKey(pr: PRItem): string {
@@ -79,7 +84,9 @@ export function findConfirmedDuplicates(items: PRItem[], opts?: { store?: Vector
     for (const pr of prs) {
       if (claimed.has(itemKey(pr))) continue;
       const diff = opts.store.getCachedDiff(pr.repo, pr.number);
-      if (!diff) continue;
+      // Skip missing AND content-free diffs (only index/hunk lines): those all
+      // normalize to the same hash and would falsely "confirm" unrelated PRs.
+      if (!diff || !normalizedDiffBody(diff)) continue;
       pushGroup(byPatch, diffFingerprint(diff), pr);
     }
     for (const fp of [...byPatch.keys()].sort()) {

@@ -58,6 +58,14 @@ describe("findConfirmedDuplicates", () => {
     expect(patch[0].items.map((i) => i.number).sort()).toEqual([1, 2]);
   });
 
+  it("does not create a confirmed group from content-free diffs (only index/hunk lines)", () => {
+    const store = {
+      getCachedDiff: () => "index 111..222\n@@ -1 +1 @@\n",
+    } as unknown as import("../store.js").VectorStore;
+    const groups = findConfirmedDuplicates([pr(1, { headRefOid: "a" }), pr(2, { headRefOid: "b" })], { store });
+    expect(groups.filter((g) => g.identity?.basis === "patch-id")).toHaveLength(0);
+  });
+
   it("head-oid takes precedence over patch-id (a claimed PR is not re-grouped)", () => {
     const store = {
       getCachedDiff: () => "diff\n+same\n",
