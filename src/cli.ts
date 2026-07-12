@@ -14,6 +14,7 @@ import { confidenceTier } from "./confidence.js";
 import { getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
+import { applyEmbeddingKey, detectRepoFromGit, injectRepoIntoConfig, resolveInitRepo, verifyInit } from "./init.js";
 import {
   createPipelineContext,
   resolveRepos,
@@ -49,7 +50,10 @@ program
 program
   .command("init")
   .description("Initialize pr-prism configuration in current directory")
-  .action(async () => {
+  .option("-r, --repo <owner/repo>", "target repo to wire into the config (defaults to the git origin remote)")
+  .option("-y, --yes", "non-interactive: skip prompts, leave the repo unresolved if undetectable")
+  .option("--no-verify", "skip the post-init connectivity checks")
+  .action(async (opts) => {
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const envExample = resolve(__dirname, "..", ".env.example");
     const configExample = resolve(__dirname, "..", "prism.config.yaml");
@@ -66,6 +70,30 @@ program
       console.log(`${chalk.green("✓")} Created prism.config.yaml (edit repo and settings)`);
     } else if (existsSync("prism.config.yaml")) {
       console.log(`${chalk.yellow("⊘")} prism.config.yaml already exists`);
+    }
+
+    // Wire the config to a real repo (flag > git origin > prompt) so scan/dupes work
+    // out of the box instead of choking on the `repo: owner/repo` placeholder.
+    const resolvedRepo = await resolveInitRepo({
+      repoFlag: opts.repo,
+      detect: (cwd) => detectRepoFromGit(cwd),
+      cwd: process.cwd(),
+      interactive: !opts.yes,
+      ask: async (question) => {
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        try {
+          return await new Promise<string>((res) => rl.question(question, res));
+        } finally {
+          rl.close();
+        }
+      },
+    });
+    if (resolvedRepo && existsSync("prism.config.yaml")) {
+      const yaml = readFileSync("prism.config.yaml", "utf-8");
+      if (yaml.includes("repo: owner/repo")) {
+        writeFileSync("prism.config.yaml", injectRepoIntoConfig(yaml, resolvedRepo));
+        console.log(`${chalk.green("✓")} wired config to ${chalk.bold(resolvedRepo)}`);
+      }
     }
 
     // Full auto-detection of available providers
@@ -174,6 +202,10 @@ program
           content = content.replace(/^LLM_PROVIDER=.*/m, `LLM_PROVIDER=${bestLLM.provider}`);
           content = content.replace(/^LLM_MODEL=.*/m, `LLM_MODEL=${bestLLM.model}`);
         }
+        // A detected cloud embedding provider needs its key written too, or it
+        // silently can't authenticate. ollama has no key -> applyEmbeddingKey no-ops.
+        const embKey = detectedKeys.find((k) => k.provider === bestEmbedding.provider);
+        content = applyEmbeddingKey(content, embKey ? (process.env[embKey.envVar] ?? null) : null);
         writeFileSync(envPath, content);
         console.log(
           chalk.dim(`\n  pre-filled .env with ${bestEmbedding.provider} + ${bestLLM?.provider || "opencode"}`),
@@ -187,15 +219,42 @@ program
       console.log(chalk.green("\n  detected: GitHub token in environment"));
     }
 
-    console.log(`\n${chalk.bold("next steps:")}`);
-    if (!hasGithubToken) {
-      console.log("  1. Add your GitHub token to .env (GITHUB_TOKEN=ghp_...)");
-      console.log("  2. Edit prism.config.yaml with your target repo");
-      console.log("  3. Run: prism doctor && prism scan");
-    } else {
-      console.log("  1. Edit prism.config.yaml with your target repo");
-      console.log("  2. Run: prism doctor && prism scan");
+    // Verify the setup end to end (config + env + github + embedding), unless --no-verify.
+    if (opts.verify !== false) {
+      console.log(`\n${chalk.bold("verifying setup:")}`);
+      const checks = await verifyInit({
+        loadConfig: () => loadConfig(),
+        loadEnvConfig: () => loadEnvConfig(),
+        network: !!resolvedRepo,
+        fetchSample: async () => {
+          const cfg = loadConfig();
+          const en = loadEnvConfig();
+          const { owner, repo } = parseRepo(getRepos(cfg)[0]);
+          await new GitHubClient(en.GITHUB_TOKEN, owner, repo).fetchPRs({ maxItems: 1 });
+        },
+        checkEmbedding: async () => {
+          const en = loadEnvConfig();
+          await createEmbeddingProvider({
+            provider: en.EMBEDDING_PROVIDER,
+            apiKey: en.EMBEDDING_API_KEY,
+            model: en.EMBEDDING_MODEL,
+          });
+          return true;
+        },
+      });
+      for (const ch of checks) {
+        const icon =
+          ch.status === "pass" ? chalk.green("✓") : ch.status === "warn" ? chalk.yellow("⚠") : chalk.red("✗");
+        console.log(`  ${icon} ${ch.name}${ch.detail ? chalk.dim(` — ${ch.detail}`) : ""}`);
+      }
     }
+
+    console.log(`\n${chalk.bold("next steps:")}`);
+    const steps: string[] = [];
+    if (!hasGithubToken) steps.push("Add your GitHub token to .env (GITHUB_TOKEN=ghp_...)");
+    if (!resolvedRepo) steps.push("Set your target repo in prism.config.yaml (or re-run with --repo owner/repo)");
+    steps.push("Run: prism doctor && prism scan");
+    steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
   });
 
 // ── doctor ──────────────────────────────────────────────────────

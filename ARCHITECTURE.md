@@ -26,6 +26,7 @@ pr-prism is a triage tool for repos drowning in PRs. CLI scans GitHub, embeds it
 ```
 src/                    # CLI tool (published to npm as prism-triage)
   cli.ts                # CLI entry point, command definitions
+  init.ts               # `prism init` logic: git-remote repo detect/inject + post-init verify (testable, extracted from cli)
   pipeline.ts           # orchestrates scan -> embed -> cluster -> score -> vision -> review
   github.ts             # GraphQL + REST client, rate limiting, backoff
   embeddings.ts         # 5 embedding providers, batch processing, dimension detection

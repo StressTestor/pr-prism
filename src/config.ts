@@ -127,6 +127,7 @@ export function loadEnvConfig(envPath?: string): EnvConfig {
 export function parseRepo(repo: string): { owner: string; repo: string } {
   let cleaned = repo.trim();
   cleaned = cleaned.replace(/^https?:\/\/github\.com\//, "");
+  cleaned = cleaned.replace(/^git@github\.com:/, ""); // SSH scp form: git@github.com:owner/repo
   cleaned = cleaned.replace(/^github\.com\//, "");
   cleaned = cleaned.replace(/\.git$/, "");
   cleaned = cleaned.replace(/\/$/, "");
