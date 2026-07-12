@@ -21,6 +21,8 @@ export interface StarmapItemRef {
   url: string;
   /** GitHub node id; present only when the scan fetched it. */
   nodeId?: string;
+  /** "open" | "closed" | "merged"; lets a consumer see an open dup superseded by a merged PR. */
+  state?: "open" | "closed" | "merged";
 }
 
 export interface StarmapItem extends StarmapItemRef {
@@ -79,7 +81,13 @@ function itemUrl(repo: string, type: "pr" | "issue", number: number): string {
   return `https://github.com/${repo}/${type === "pr" ? "pull" : "issues"}/${number}`;
 }
 
-function ref(item: { repo: string; number: number; type: "pr" | "issue"; nodeId?: string }): StarmapItemRef {
+function ref(item: {
+  repo: string;
+  number: number;
+  type: "pr" | "issue";
+  nodeId?: string;
+  state?: string;
+}): StarmapItemRef {
   const r: StarmapItemRef = {
     repo: item.repo,
     number: item.number,
@@ -87,6 +95,9 @@ function ref(item: { repo: string; number: number; type: "pr" | "issue"; nodeId?
     url: itemUrl(item.repo, item.type, item.number),
   };
   if (item.nodeId) r.nodeId = item.nodeId;
+  if (item.state === "open" || item.state === "closed" || item.state === "merged") {
+    r.state = item.state;
+  }
   return r;
 }
 

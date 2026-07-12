@@ -21,6 +21,8 @@ export interface CanonicalCandidate {
   score: number;
   reviewCount?: number;
   number: number;
+  /** "open" | "closed" | "merged"; absent for callers with no state (triage). */
+  state?: string;
 }
 
 function createdMs(item: CanonicalCandidate): number {
@@ -42,9 +44,30 @@ export interface CanonicalDecision<T> {
   contested: boolean;
 }
 
+/**
+ * Rank a PR by lifecycle state: a merged PR is already in main = the true source
+ * of truth, so it outranks open, which outranks a closed-unmerged PR. Absent state
+ * (a triage DupeMatch has none) is 0, below every real state, so a stateless set
+ * all ties here and falls through to the score/date rules unchanged.
+ */
+function statePriority(state: string | undefined): number {
+  switch (state) {
+    case "merged":
+      return 3;
+    case "open":
+      return 2;
+    case "closed":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 function isNearTie<T extends CanonicalCandidate>(mode: "issue" | "pr", canonical: T, runnerUp: T): boolean {
   if (mode === "pr") {
-    // The pick is on score, so nearness is a score gap.
+    // A different lifecycle state decided the pick (e.g. merged over open) -> a
+    // clear winner, not a coin flip. Only a same-state pair is a score near-tie.
+    if (statePriority(canonical.state) !== statePriority(runnerUp.state)) return false;
     return canonical.score - runnerUp.score < TIE_MARGIN;
   }
   // The pick is on createdAt, so nearness is a time window (a huge score gap
@@ -82,7 +105,11 @@ export function decideCanonical<T extends CanonicalCandidate>(
       if (d !== 0) return d;
       if (b.score !== a.score) return b.score - a.score;
     } else {
-      if (b.score !== a.score) return b.score - a.score; // highest score first
+      // Prefer a merged PR (the real source of truth) over open over closed,
+      // BEFORE score - a merged fix often does not have the top computed score.
+      const sp = statePriority(b.state) - statePriority(a.state);
+      if (sp !== 0) return sp;
+      if (b.score !== a.score) return b.score - a.score; // then highest score first
       const d = createdMs(a) - createdMs(b);
       if (d !== 0) return d;
       const r = (b.reviewCount ?? 0) - (a.reviewCount ?? 0);

@@ -1,4 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { restPRState } from "../github.js";
+
+describe("restPRState (REST merged detection)", () => {
+  it("maps a PR with merged_at to 'merged' (REST state is only open/closed)", () => {
+    expect(restPRState({ state: "closed", merged_at: "2026-01-01T00:00:00Z" })).toBe("merged");
+  });
+
+  it("keeps the REST state when the PR is not merged", () => {
+    expect(restPRState({ state: "open", merged_at: null })).toBe("open");
+    expect(restPRState({ state: "closed", merged_at: null })).toBe("closed");
+  });
+});
 
 // Test the CI status mapping logic (extracted from github.ts for testability)
 function mapCIStatus(state: string | null | undefined): "success" | "failure" | "pending" | "unknown" {
