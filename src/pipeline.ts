@@ -8,6 +8,7 @@ import { getRepos, getVisionDoc, loadConfig, loadEnvConfig, parseRepo } from "./
 import { createEmbeddingProvider, embeddingConfigHash, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { applyLabelActions, ensureLabelsExist, type LabelAction } from "./labels.js";
+import { escapeTableCell, sanitizeTitle } from "./sanitize.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
 import { cosineSimilarity, isZeroVector } from "./similarity.js";
 import { VectorStore } from "./store.js";
@@ -338,8 +339,13 @@ export async function runDupes(
           avgSimilarity: c.avgSimilarity,
           minSimilarity: c.minSimilarity,
           bestPick: c.bestPick.number,
-          theme: c.theme,
-          items: c.items.map((i) => ({ number: i.number, type: i.type, title: i.title, score: i.score })),
+          theme: sanitizeTitle(c.theme),
+          items: c.items.map((i) => ({
+            number: i.number,
+            type: i.type,
+            title: sanitizeTitle(i.title),
+            score: i.score,
+          })),
         }),
       );
     }
@@ -351,7 +357,7 @@ export async function runDupes(
     md += `| # | Size | Avg Sim | Min Sim | Best Pick | Theme |\n`;
     md += `|---|------|---------|---------|-----------|-------|\n`;
     for (const c of clusters) {
-      const theme = c.theme.replace(/\|/g, "\\|").slice(0, 60);
+      const theme = escapeTableCell(c.theme, 60);
       md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | ${(c.minSimilarity * 100).toFixed(1)}% | #${c.bestPick.number} | ${theme} |\n`;
     }
     md += `\nTotal: ${clusters.reduce((s, c) => s + c.items.length, 0)} items across ${clusters.length} clusters\n`;
@@ -371,7 +377,7 @@ export async function runDupes(
       `${(cluster.avgSimilarity * 100).toFixed(1)}%`,
       `${(cluster.minSimilarity * 100).toFixed(1)}%`,
       `#${cluster.bestPick.number}`,
-      cluster.theme.slice(0, 42),
+      sanitizeTitle(cluster.theme, 42),
     ]);
   }
 
@@ -446,9 +452,15 @@ export async function runDupesMulti(
           avgSimilarity: c.avgSimilarity,
           minSimilarity: c.minSimilarity,
           bestPick: { number: c.bestPick.number, repo: c.bestPick.repo },
-          theme: c.theme,
+          theme: sanitizeTitle(c.theme),
           crossRepo: new Set(c.items.map((i) => i.repo)).size > 1,
-          items: c.items.map((i) => ({ number: i.number, repo: i.repo, type: i.type, title: i.title, score: i.score })),
+          items: c.items.map((i) => ({
+            number: i.number,
+            repo: i.repo,
+            type: i.type,
+            title: sanitizeTitle(i.title),
+            score: i.score,
+          })),
         }),
       );
     }
@@ -460,7 +472,7 @@ export async function runDupesMulti(
     md += `| # | Size | Avg Sim | Min Sim | Best Pick | Theme |\n`;
     md += `|---|------|---------|---------|-----------|-------|\n`;
     for (const c of clusters) {
-      const theme = c.theme.replace(/\|/g, "\\|").slice(0, 60);
+      const theme = escapeTableCell(c.theme, 60);
       const bestLabel = `[${c.bestPick.repo}] #${c.bestPick.number}`;
       md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | ${(c.minSimilarity * 100).toFixed(1)}% | ${bestLabel} | ${theme} |\n`;
     }
@@ -485,7 +497,7 @@ export async function runDupesMulti(
       `${(cluster.avgSimilarity * 100).toFixed(1)}%`,
       `${(cluster.minSimilarity * 100).toFixed(1)}%`,
       bestLabel,
-      cluster.theme.slice(0, 34),
+      sanitizeTitle(cluster.theme, 34),
     ]);
   }
 
@@ -557,7 +569,7 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number; explai
           type: pr.type,
           score: pr.score,
           author: pr.author,
-          title: pr.title,
+          title: sanitizeTitle(pr.title),
           signals: pr.signals,
         }),
       );
@@ -571,7 +583,13 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number; explai
   });
 
   top.forEach((pr, i) => {
-    table.push([i + 1, pr.number, pr.score.toFixed(2), (pr.author || "unknown").slice(0, 14), pr.title.slice(0, 48)]);
+    table.push([
+      i + 1,
+      pr.number,
+      pr.score.toFixed(2),
+      (pr.author || "unknown").slice(0, 14),
+      sanitizeTitle(pr.title, 48),
+    ]);
   });
 
   console.log(table.toString());
@@ -663,7 +681,7 @@ export async function runVision(
       md += `| # | Score | Matched Section |\n`;
       md += `|---|-------|-----------------|\n`;
       for (const s of offVision.slice(0, 20)) {
-        md += `| #${s.prNumber} | ${s.score.toFixed(2)} | ${s.matchedSection.replace(/\|/g, "\\|").slice(0, 60)} |\n`;
+        md += `| #${s.prNumber} | ${s.score.toFixed(2)} | ${escapeTableCell(s.matchedSection, 60)} |\n`;
       }
     }
     console.log(md);
@@ -727,7 +745,12 @@ export async function runVision(
     const statusColor = (c: string) =>
       c === "aligned" ? chalk.green(c) : c === "drifting" ? chalk.yellow(c) : chalk.red(c);
     for (const s of scores.slice(0, 50)) {
-      detailTable.push([s.prNumber, s.score.toFixed(2), statusColor(s.classification), s.matchedSection.slice(0, 48)]);
+      detailTable.push([
+        s.prNumber,
+        s.score.toFixed(2),
+        statusColor(s.classification),
+        sanitizeTitle(s.matchedSection, 48),
+      ]);
     }
     console.log(detailTable.toString());
     if (scores.length > 50) {
@@ -739,7 +762,7 @@ export async function runVision(
     console.log(chalk.bold("\nOff-vision PRs:"));
     const table = new Table({ head: ["#", "Score", "Matched Section"], colWidths: [8, 8, 50] });
     for (const s of offVision.slice(0, 20)) {
-      table.push([s.prNumber, s.score.toFixed(2), s.matchedSection.slice(0, 48)]);
+      table.push([s.prNumber, s.score.toFixed(2), sanitizeTitle(s.matchedSection, 48)]);
     }
     console.log(table.toString());
   }
@@ -802,14 +825,14 @@ export async function runCompare(
       JSON.stringify({
         command: "compare",
         similarity,
-        item1: { number: number1, type: item1.type, title: item1.title },
-        item2: { number: number2, type: item2.type, title: item2.title },
+        item1: { number: number1, type: item1.type, title: sanitizeTitle(item1.title) },
+        item2: { number: number2, type: item2.type, title: sanitizeTitle(item2.title) },
       }),
     );
   } else {
     console.log(chalk.bold(`\nComparing #${number1} vs #${number2}\n`));
-    console.log(`  #${number1}: ${item1.title}`);
-    console.log(`  #${number2}: ${item2.title}`);
+    console.log(`  #${number1}: ${sanitizeTitle(item1.title)}`);
+    console.log(`  #${number2}: ${sanitizeTitle(item2.title)}`);
     console.log();
 
     const simPct = (similarity * 100).toFixed(1);

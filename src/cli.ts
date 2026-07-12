@@ -26,6 +26,7 @@ import {
   runVision,
 } from "./pipeline.js";
 import { reviewPR } from "./reviewer.js";
+import { escapeTableCell, sanitizeTitle } from "./sanitize.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
 import { cosineSimilarity } from "./similarity.js";
 import { buildStarmapPayload } from "./starmap.js";
@@ -487,13 +488,13 @@ program
           }
           return;
         }
-        console.log(chalk.bold(`\nCluster #${cluster.id}: "${cluster.theme}"`));
+        console.log(chalk.bold(`\nCluster #${cluster.id}: "${sanitizeTitle(cluster.theme)}"`));
         console.log(`Items: ${cluster.items.length} | Avg similarity: ${(cluster.avgSimilarity * 100).toFixed(1)}%\n`);
         for (const item of cluster.items) {
           const isBest = item.number === cluster.bestPick.number;
           const prefix = isBest ? chalk.green("★") : " ";
           const repoTag = isMultiRepo ? chalk.dim(`[${item.repo}] `) : "";
-          console.log(`${prefix} ${repoTag}#${item.number} ${item.title}`);
+          console.log(`${prefix} ${repoTag}#${item.number} ${sanitizeTitle(item.title)}`);
           console.log(
             `  Author: ${item.author} | Updated: ${item.updatedAt.slice(0, 10)} | Score: ${item.score.toFixed(2)}`,
           );
@@ -594,7 +595,7 @@ function displayReview(
   result: { summary: string; concerns: string[]; recommendation: string; confidence: number },
   meta?: { author?: string; additions?: number; deletions?: number; provider?: string; model?: string },
 ) {
-  console.log(chalk.bold(`\n  #${num}: ${title}`));
+  console.log(chalk.bold(`\n  #${num}: ${sanitizeTitle(title)}`));
   if (meta?.author) console.log(`  Author: ${meta.author} | ${meta.additions ?? "?"}+/${meta.deletions ?? "?"}−`);
   if (meta?.provider) console.log(chalk.dim(`  Reviewed with ${meta.provider}/${meta.model}`));
   console.log();
@@ -1116,13 +1117,13 @@ program
             avgSimilarity: c.avgSimilarity,
             minSimilarity: c.minSimilarity,
             bestPick: c.bestPick.number,
-            theme: c.theme,
+            theme: sanitizeTitle(c.theme),
           })),
           ranked: ranked.slice(0, topN).map((pr) => ({
             number: pr.number,
             score: pr.score,
             author: pr.author,
-            title: pr.title,
+            title: sanitizeTitle(pr.title),
           })),
           vision: visionResults,
         }),
@@ -1160,7 +1161,7 @@ program
     report += `| # | size | avg similarity | min similarity | confidence | source of truth | theme |\n`;
     report += `|---|------|---------------|----------------|-----------|-----------------|-------|\n`;
     for (const cluster of clusters.slice(0, clusterN)) {
-      const theme = cluster.theme.replace(/\|/g, "\\|").slice(0, 60);
+      const theme = escapeTableCell(cluster.theme, 60);
       const minPct = cluster.minSimilarity * 100;
       const tier = confidenceTier(cluster.minSimilarity);
       const confidence = tier === "loose" ? "loose ⚠" : tier;
@@ -1181,9 +1182,9 @@ program
         const sourceEmb = store.getEmbedding(sourceId);
         const sourceLinkType = source.type === "pr" ? "pull" : "issues";
 
-        const themeText = cluster.theme.replace(/\|/g, "\\|").slice(0, 80);
+        const themeText = escapeTableCell(cluster.theme, 80);
         report += `### cluster ${cluster.id}: ${themeText} (${cluster.items.length} items)\n\n`;
-        report += `**source of truth:** [#${source.number}](https://github.com/${repoFull}/${sourceLinkType}/${source.number}) — "${source.title.slice(0, 80)}"\n`;
+        report += `**source of truth:** [#${source.number}](https://github.com/${repoFull}/${sourceLinkType}/${source.number}) — "${escapeTableCell(source.title, 80)}"\n`;
         report += `opened: ${source.createdAt.slice(0, 10)} by @${source.author || "unknown"} | quality score: ${source.score.toFixed(2)}\n\n`;
 
         const dupes = cluster.items.filter((i) => i.number !== source.number);
@@ -1211,7 +1212,7 @@ program
           report += `|---|-----------|-------|--------|--------|\n`;
           for (const d of dupesWithSim) {
             const dLinkType = d.type === "pr" ? "pull" : "issues";
-            const title = d.title.replace(/\|/g, "\\|").slice(0, 60);
+            const title = escapeTableCell(d.title, 60);
             report += `| [#${d.number}](https://github.com/${repoFull}/${dLinkType}/${d.number}) | ${(d.similarity * 100).toFixed(1)}% | ${title} | ${d.createdAt.slice(0, 10)} | @${d.author || "unknown"} |\n`;
           }
         } else if (dupes.length > 0) {
@@ -1220,7 +1221,7 @@ program
           report += `|---|-------|--------|--------|\n`;
           for (const d of dupes) {
             const dLinkType = d.type === "pr" ? "pull" : "issues";
-            const title = d.title.replace(/\|/g, "\\|").slice(0, 60);
+            const title = escapeTableCell(d.title, 60);
             report += `| [#${d.number}](https://github.com/${repoFull}/${dLinkType}/${d.number}) | ${title} | ${d.createdAt.slice(0, 10)} | @${d.author || "unknown"} |\n`;
           }
         }
@@ -1232,11 +1233,11 @@ program
       if (bigClusters.length > 0) {
         report += `## largest duplicate groups\n\n`;
         for (const cluster of bigClusters) {
-          report += `### cluster #${cluster.id}: ${cluster.theme.slice(0, 80)} (${cluster.items.length} items)\n\n`;
+          report += `### cluster #${cluster.id}: ${escapeTableCell(cluster.theme, 80)} (${cluster.items.length} items)\n\n`;
           report += `| # | author | title | updated |\n`;
           report += `|---|--------|-------|--------|\n`;
           for (const item of cluster.items.slice(0, 15)) {
-            const title = item.title.replace(/\|/g, "\\|").slice(0, 60);
+            const title = escapeTableCell(item.title, 60);
             const linkType = item.type === "pr" ? "pull" : "issues";
             report += `| [#${item.number}](https://github.com/${repoFull}/${linkType}/${item.number}) | ${item.author || "?"} | ${title} | ${item.updatedAt.slice(0, 10)} |\n`;
           }
@@ -1254,7 +1255,7 @@ program
     report += `|------|---|-------|--------|-------|\n`;
     for (let i = 0; i < Math.min(topN, ranked.length); i++) {
       const pr = ranked[i];
-      const title = pr.title.replace(/\|/g, "\\|").slice(0, 60);
+      const title = escapeTableCell(pr.title, 60);
       report += `| ${i + 1} | [#${pr.number}](https://github.com/${repoFull}/pull/${pr.number}) | ${pr.score.toFixed(2)} | ${pr.author || "?"} | ${title} |\n`;
     }
     report += `\n`;

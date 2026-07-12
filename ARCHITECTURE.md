@@ -34,6 +34,7 @@ src/                    # CLI tool (published to npm as prism-triage)
   cluster.ts            # cosine similarity, BFS clustering, duplicate detection
   canonical.ts          # selectCanonical()/decideCanonical() source-of-truth pick (merged preferred) + contested; selectTracker() original-bug + fix/duplicate candidates
   similarity.ts         # ANN pre-filtering, matryoshka truncation
+  sanitize.ts           # title/theme emit sanitizer: strip control/ANSI, escape markdown table cells (row-injection defense)
   scorer.ts             # 7 quality signals: tests, CI, diff size, author history, etc.
   starmap.ts            # stable star-map JSON contract: clusters + minSim/confidence/partition/contested+runnerUp + tracker(original bug + fix/duplicate candidates) + item state (open/closed/merged) + embeddingModel/provider/dims/configHash + node ids + (repo,number) join key
   vision.ts             # chunked vision doc embedding, alignment scoring

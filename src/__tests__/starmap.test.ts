@@ -184,4 +184,21 @@ describe("buildStarmapPayload", () => {
     expect(p.clusters[1].contested).toBe(false);
     expect(p.clusters[1].runnerUp?.number).toBe(21);
   });
+
+  it("control-strips and length-caps item titles and theme in the payload", () => {
+    const ESC = String.fromCharCode(27);
+    const c = cluster(
+      1,
+      [item(1, "pr", 0.9, { title: `evil${ESC}[31m\ntitle` }), item(2, "pr", 0.5, { title: "x".repeat(1000) })],
+      0.93,
+      0.9,
+    );
+    const out = buildStarmapPayload([c], META).clusters[0];
+    const t1 = out.items.find((i) => i.number === 1)?.title ?? "";
+    expect(t1).not.toContain(ESC);
+    expect(t1).not.toContain("\n");
+    expect(out.items.find((i) => i.number === 2)?.title.length ?? 0).toBeLessThanOrEqual(256);
+    expect(out.theme).not.toContain(ESC); // theme derives from the evil title
+    expect(() => JSON.parse(JSON.stringify(out))).not.toThrow();
+  });
 });
