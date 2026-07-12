@@ -254,7 +254,9 @@ program
     if (!hasGithubToken) steps.push("Add your GitHub token to .env (GITHUB_TOKEN=ghp_...)");
     if (!resolvedRepo) steps.push("Set your target repo in prism.config.yaml (or re-run with --repo owner/repo)");
     steps.push("Run: prism doctor && prism scan");
-    steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
+    steps.forEach((s, i) => {
+      console.log(`  ${i + 1}. ${s}`);
+    });
   });
 
 // ── doctor ──────────────────────────────────────────────────────
