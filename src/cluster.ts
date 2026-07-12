@@ -1,3 +1,4 @@
+import { selectCanonical } from "./canonical.js";
 import { DEFAULT_SCORING_WEIGHTS } from "./config.js";
 import { normalizeDescriptionQuality, normalizeDiffSize } from "./scorer.js";
 import { cosineSimilarity, isZeroVector } from "./similarity.js";
@@ -249,7 +250,9 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
     clusters.push({
       id: 0, // reassigned below
       items: clusterItems,
-      bestPick: clusterItems[0],
+      // Canonical via the shared selector (issue-majority -> earliest report,
+      // PR-majority -> highest score); clusterItems stays score-sorted for display.
+      bestPick: selectCanonical(clusterItems),
       avgSimilarity: pairs > 0 ? totalSim / pairs : 0,
       minSimilarity: pairs > 0 ? minSim : 0,
       theme: clusterItems[0].title,

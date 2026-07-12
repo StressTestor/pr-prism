@@ -8,6 +8,7 @@ import chalk from "chalk";
 import { Command } from "commander";
 import ora from "ora";
 import { runBenchmark } from "./benchmark.js";
+import { selectCanonical } from "./canonical.js";
 import { findDuplicateClusters } from "./cluster.js";
 import { getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
@@ -1101,27 +1102,7 @@ program
       const minPct = cluster.minSimilarity * 100;
       const tier = confidenceTier(cluster.minSimilarity);
       const confidence = tier === "loose" ? "loose ⚠" : tier;
-      // Source of truth selection:
-      // - For issue-majority clusters: earliest open date first (canonical first report),
-      //   then description quality, then most discussion
-      // - For PR-majority clusters: highest quality score first, then earliest date
-      const issueCount = cluster.items.filter((i) => i.type === "issue").length;
-      const isIssueMajority = issueCount > cluster.items.length / 2;
-      const source = [...cluster.items].sort((a, b) => {
-        if (isIssueMajority) {
-          // earliest first, quality as tiebreaker
-          const aDate = new Date(a.createdAt).getTime();
-          const bDate = new Date(b.createdAt).getTime();
-          if (aDate !== bDate) return aDate - bDate;
-          return b.score - a.score;
-        }
-        // PR clusters: highest score first, earliest as tiebreaker
-        if (b.score !== a.score) return b.score - a.score;
-        const aDate = new Date(a.createdAt).getTime();
-        const bDate = new Date(b.createdAt).getTime();
-        if (aDate !== bDate) return aDate - bDate;
-        return (b.reviewCount || 0) - (a.reviewCount || 0);
-      })[0];
+      const source = selectCanonical(cluster.items);
       const linkType = source.type === "pr" ? "pull" : "issues";
       report += `| ${cluster.id} | ${cluster.items.length} | ${(cluster.avgSimilarity * 100).toFixed(1)}% | ${minPct.toFixed(1)}% | ${confidence} | [#${source.number}](https://github.com/${repoFull}/${linkType}/${source.number}) | ${theme} |\n`;
     }
@@ -1132,22 +1113,7 @@ program
       report += `each cluster expanded with per-item similarity against the source of truth. close duplicates as "duplicate of #source".\n\n`;
 
       for (const cluster of clusters.slice(0, clusterN)) {
-        // Pick source of truth with same criteria as summary table
-        const issueCount2 = cluster.items.filter((i) => i.type === "issue").length;
-        const isIssueMajority2 = issueCount2 > cluster.items.length / 2;
-        const source = [...cluster.items].sort((a, b) => {
-          if (isIssueMajority2) {
-            const aDate = new Date(a.createdAt).getTime();
-            const bDate = new Date(b.createdAt).getTime();
-            if (aDate !== bDate) return aDate - bDate;
-            return b.score - a.score;
-          }
-          if (b.score !== a.score) return b.score - a.score;
-          const aDate = new Date(a.createdAt).getTime();
-          const bDate = new Date(b.createdAt).getTime();
-          if (aDate !== bDate) return aDate - bDate;
-          return (b.reviewCount || 0) - (a.reviewCount || 0);
-        })[0];
+        const source = selectCanonical(cluster.items);
 
         const sourceId = `${repoFull}:${source.type}:${source.number}`;
         const sourceEmb = store.getEmbedding(sourceId);

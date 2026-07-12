@@ -1,3 +1,4 @@
+import { selectCanonical } from "../src/canonical.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "../src/embeddings.js";
 import { cosineSimilarity, isZeroVector } from "../src/similarity.js";
 import type { StoreItem } from "../src/types.js";
@@ -139,19 +140,16 @@ export async function triageNewItem(
     // sort by similarity descending
     matches.sort((a, b) => b.similarity - a.similarity);
 
-    // pick source of truth:
-    // for issues -> earliest createdAt among matches
-    // for PRs -> highest similarity score (already sorted, so first)
-    let source: DupeMatch;
-    if (itemType === "issue") {
-      source = matches.reduce((earliest, m) => {
-        if (!earliest.createdAt) return m;
-        if (!m.createdAt) return earliest;
-        return m.createdAt < earliest.createdAt ? m : earliest;
-      });
-    } else {
-      source = matches[0];
-    }
+    // pick source of truth via the shared selector. DupeMatch has no quality
+    // score, so similarity stands in as the score; `mode: itemType` pins the rule
+    // to the incoming item's type (issue -> earliest, PR -> highest similarity),
+    // same rule as before. One deliberate change: exact ties (same createdAt /
+    // same similarity) now resolve by score then lowest item number instead of
+    // first-seen match order, so repeat runs name the same canonical.
+    const source: DupeMatch = selectCanonical(
+      matches.map((m) => ({ ...m, score: m.similarity })),
+      { mode: itemType },
+    );
 
     const elapsedMs = performance.now() - start;
 
