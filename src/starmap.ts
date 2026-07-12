@@ -1,3 +1,4 @@
+import { decideCanonical } from "./canonical.js";
 import { type Confidence, confidenceTier } from "./confidence.js";
 import type { Cluster } from "./types.js";
 
@@ -7,9 +8,6 @@ import type { Cluster } from "./types.js";
 // contested picks) plus a (repo, number) join key.
 
 export const STARMAP_SCHEMA_VERSION = 1;
-
-// Top-two score gap below which the best pick is treated as a coin flip.
-const TIE_MARGIN = 0.05;
 
 // Confidence tiering lives in its own module now; re-exported so existing
 // importers of `./starmap.js` (cli.ts, starmap.test.ts, the payload types) keep
@@ -42,6 +40,8 @@ export interface StarmapCluster {
   confidence: Confidence;
   canonical: StarmapItemRef;
   contested: boolean;
+  /** The rule-runner-up to canonical (the item contested is measured against), or null. */
+  runnerUp: StarmapItemRef | null;
   runnerUpMargin: number | null;
   partition: { issues: StarmapItemRef[]; prs: StarmapItemRef[] };
   items: StarmapItem[];
@@ -93,7 +93,11 @@ function ref(item: { repo: string; number: number; type: "pr" | "issue"; nodeId?
 export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): StarmapPayload {
   const outClusters: StarmapCluster[] = clusters.map((c) => {
     const ranked = [...c.items].sort((a, b) => b.score - a.score);
+    // runnerUpMargin stays the top-two QUALITY-SCORE spread (an independent signal).
+    // contested / runnerUp come from decideCanonical so they reflect the actual
+    // canonical rule (earliest-report for issue clusters), not a score sort.
     const runnerUpMargin = ranked.length >= 2 ? ranked[0].score - ranked[1].score : null;
+    const decision = decideCanonical(c.items);
     const items: StarmapItem[] = ranked.map((it) => ({
       ...ref(it),
       title: it.title,
@@ -109,8 +113,9 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
       avgSimilarity: c.avgSimilarity,
       minSimilarity: c.minSimilarity,
       confidence: confidenceTier(c.minSimilarity),
-      canonical: ref(c.bestPick),
-      contested: runnerUpMargin != null && runnerUpMargin < TIE_MARGIN,
+      canonical: ref(decision.canonical),
+      contested: decision.contested,
+      runnerUp: decision.runnerUp ? ref(decision.runnerUp) : null,
       runnerUpMargin,
       partition: {
         issues: items.filter((i) => i.type === "issue").map(ref),

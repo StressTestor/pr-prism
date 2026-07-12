@@ -31,10 +31,10 @@ src/                    # CLI tool (published to npm as prism-triage)
   embeddings.ts         # 5 embedding providers, batch processing, dimension detection
   store.ts              # SQLite + sqlite-vec, schema migrations, dimension validation
   cluster.ts            # cosine similarity, BFS clustering, duplicate detection
-  canonical.ts          # single selectCanonical(): one source-of-truth pick for cluster/report/triage
+  canonical.ts          # selectCanonical()/decideCanonical(): one source-of-truth pick + rule-runner-up + canonical-aware contested flag
   similarity.ts         # ANN pre-filtering, matryoshka truncation
   scorer.ts             # 7 quality signals: tests, CI, diff size, author history, etc.
-  starmap.ts            # stable star-map JSON contract: clusters + minSim/confidence/partition/contested + embeddingModel/provider/dims/configHash + node ids + (repo,number) join key
+  starmap.ts            # stable star-map JSON contract: clusters + minSim/confidence/partition/contested+runnerUp + embeddingModel/provider/dims/configHash + node ids + (repo,number) join key
   vision.ts             # chunked vision doc embedding, alignment scoring
   reviewer.ts           # multi-provider LLM review
   labels.ts             # GitHub label management with rate limiting
