@@ -65,6 +65,11 @@ export interface StarmapCluster {
   /** The original bug (tracker) + role-tagged fix/duplicate candidates. Differs
    * from canonical for a PR-majority cluster that contains an issue. */
   tracker: StarmapTracker;
+  /** True only for a deterministic confirmed-duplicate cluster (same head-oid /
+   * patch-id), not a fuzzy similarity match. Omitted for fuzzy clusters. */
+  confirmed?: boolean;
+  /** For a confirmed cluster: what made it certain and the shared key. */
+  identity?: { basis: "head-oid" | "patch-id"; key: string };
   items: StarmapItem[];
 }
 
@@ -120,8 +125,15 @@ function ref(item: {
   return r;
 }
 
-export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): StarmapPayload {
-  const outClusters: StarmapCluster[] = clusters.map((c) => {
+export function buildStarmapPayload(
+  clusters: Cluster[],
+  meta: StarmapMeta,
+  opts?: { confirmed?: Cluster[] },
+): StarmapPayload {
+  // Confirmed (head-oid / patch-id) clusters sit first so a consumer sees the
+  // certain duplicates above the fuzzy ones; index is the position in this list.
+  const allClusters = [...(opts?.confirmed ?? []), ...clusters];
+  const outClusters: StarmapCluster[] = allClusters.map((c, i) => {
     const ranked = [...c.items].sort((a, b) => b.score - a.score);
     // runnerUpMargin stays the top-two QUALITY-SCORE spread (an independent signal).
     // contested / runnerUp come from decideCanonical so they reflect the actual
@@ -141,9 +153,10 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
       updatedAt: it.updatedAt,
       score: it.score,
     }));
-    return {
-      id: `t${meta.threshold.toString().replace(".", "")}-cluster-${c.id}`,
-      index: c.id,
+    const kind = c.kind === "identity" ? "identity" : "cluster";
+    const out: StarmapCluster = {
+      id: `t${meta.threshold.toString().replace(".", "")}-${kind}-${c.id}`,
+      index: i,
       theme: sanitizeTitle(c.theme),
       size: c.items.length,
       avgSimilarity: c.avgSimilarity,
@@ -160,6 +173,9 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
       tracker,
       items,
     };
+    if (c.kind === "identity") out.confirmed = true;
+    if (c.identity) out.identity = c.identity;
+    return out;
   });
 
   return {
@@ -171,8 +187,8 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
     embeddingDimensions: meta.embeddingDimensions,
     embeddingConfigHash: meta.embeddingConfigHash,
     threshold: meta.threshold,
-    totalItems: clusters.reduce((sum, c) => sum + c.items.length, 0),
-    clusterCount: clusters.length,
+    totalItems: allClusters.reduce((sum, c) => sum + c.items.length, 0),
+    clusterCount: allClusters.length,
     clusters: outClusters,
   };
 }

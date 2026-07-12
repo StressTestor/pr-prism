@@ -198,4 +198,35 @@ describe("VectorStore", () => {
     expect(stats.prs).toBe(0);
     store.close();
   });
+
+  it("hydrates headRefOid from metadata in getAllItems and the multi-repo path", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+    const mk = (repo: string, n: number, oid: string) => ({
+      id: `${repo}:pr:${n}`,
+      type: "pr" as const,
+      number: n,
+      repo,
+      title: "T",
+      bodySnippet: "B",
+      embedding: new Float32Array([1, 2, 3, 4]),
+      metadata: { headRefOid: oid },
+      createdAt: "2026-01-01",
+      updatedAt: "2026-01-01",
+    });
+    store.upsert(mk("o/a", 1, "oidA"));
+    store.upsert(mk("o/b", 2, "oidB"));
+
+    const single = store.getAllItems("o/a") as unknown as Array<{ headRefOid?: string }>;
+    expect(single[0].headRefOid).toBe("oidA");
+
+    const multi = store.getAllItemsMulti(["o/a", "o/b"]) as unknown as Array<{
+      number: number;
+      headRefOid?: string;
+    }>;
+    expect(multi.find((i) => i.number === 1)?.headRefOid).toBe("oidA");
+    expect(multi.find((i) => i.number === 2)?.headRefOid).toBe("oidB");
+    store.close();
+  });
 });

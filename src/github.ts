@@ -166,6 +166,7 @@ export class GitHubClient {
                   additions
                   deletions
                   changedFiles
+                  headRefOid
                   labels(first: 20) { nodes { name } }
                   reviews { totalCount }
                   files(first: 100) { totalCount nodes { path } }
@@ -227,6 +228,7 @@ export class GitHubClient {
           author: pr.author?.login || "unknown",
           createdAt: pr.createdAt,
           nodeId: pr.id,
+          headRefOid: pr.headRefOid,
           updatedAt: pr.updatedAt,
           labels: (pr.labels?.nodes || []).map((l: any) => l.name),
           additions: pr.additions,
@@ -386,6 +388,7 @@ export class GitHubClient {
           author: pr.user?.login || "unknown",
           createdAt: pr.created_at,
           nodeId: pr.node_id,
+          headRefOid: pr.head?.sha,
           updatedAt: pr.updated_at,
           labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name || "")),
           diffUrl: pr.diff_url,
@@ -467,6 +470,7 @@ export class GitHubClient {
     return {
       number: pr.number,
       nodeId: pr.node_id,
+      headRefOid: pr.head?.sha,
       type: "pr",
       repo: `${this.owner}/${this.repo}`,
       title: pr.title,

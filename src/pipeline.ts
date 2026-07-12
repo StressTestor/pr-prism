@@ -272,6 +272,7 @@ export async function runScan(
           hasTests: item.hasTests,
           bodyLength: item.body.length,
           nodeId: item.nodeId,
+          headRefOid: item.headRefOid,
         },
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,

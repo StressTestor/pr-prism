@@ -272,6 +272,7 @@ export class VectorStore {
         reviewCount: metadata.reviewCount,
         hasTests: metadata.hasTests,
         nodeId: metadata.nodeId,
+        headRefOid: metadata.headRefOid,
         body: row.body_snippet,
       };
     });
@@ -323,6 +324,7 @@ export class VectorStore {
         reviewCount: metadata.reviewCount,
         hasTests: metadata.hasTests,
         nodeId: metadata.nodeId,
+        headRefOid: metadata.headRefOid,
         body: row.body_snippet,
       } as StoreItem;
     });

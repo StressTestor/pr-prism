@@ -31,8 +31,9 @@ src/                    # CLI tool (published to npm as prism-triage)
   github.ts             # GraphQL + REST client, rate limiting, backoff
   embeddings.ts         # 5 embedding providers, batch processing, dimension detection
   store.ts              # SQLite + sqlite-vec, schema migrations, dimension validation
-  cluster.ts            # cosine similarity, BFS clustering, duplicate detection
+  cluster.ts            # cosine similarity, BFS clustering, duplicate detection; scoreClusterItem() shared scorer
   canonical.ts          # selectCanonical()/decideCanonical() source-of-truth pick (merged preferred) + contested; selectTracker() original-bug + fix/duplicate candidates
+  identity.ts           # findConfirmedDuplicates(): deterministic non-embedding dupe tier (same head-oid / patch-id)
   similarity.ts         # ANN pre-filtering, matryoshka truncation
   sanitize.ts           # title/theme emit sanitizer: strip control/ANSI, escape markdown table cells (row-injection defense)
   scorer.ts             # 7 quality signals: tests, CI, diff size, author history, etc.
