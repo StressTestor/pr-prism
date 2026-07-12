@@ -31,9 +31,10 @@ src/                    # CLI tool (published to npm as prism-triage)
   embeddings.ts         # 5 embedding providers, batch processing, dimension detection
   store.ts              # SQLite + sqlite-vec, schema migrations, dimension validation
   cluster.ts            # cosine similarity, BFS clustering, duplicate detection
+  canonical.ts          # single selectCanonical(): one source-of-truth pick for cluster/report/triage
   similarity.ts         # ANN pre-filtering, matryoshka truncation
   scorer.ts             # 7 quality signals: tests, CI, diff size, author history, etc.
-  starmap.ts            # stable star-map JSON contract: clusters + minSim/confidence/partition/contested + (repo,number) join key
+  starmap.ts            # stable star-map JSON contract: clusters + minSim/confidence/partition/contested + embeddingModel/provider/dims/configHash + node ids + (repo,number) join key
   vision.ts             # chunked vision doc embedding, alignment scoring
   reviewer.ts           # multi-provider LLM review
   labels.ts             # GitHub label management with rate limiting
@@ -64,7 +65,8 @@ server/                 # webhook server (GitHub App)
 - **incremental processing**: only re-embeds new/changed items. crash-recoverable via sqlite
 - **read-only default**: no repo modifications unless `--apply-labels` explicitly passed
 - **cross-repo**: config accepts multiple repos, dupe detection works across repo boundaries
-- **cluster confidence**: clustering is single-linkage (BFS over pairs >= threshold) with a centroid-refinement pass to break chained mega-clusters. because single-linkage can still chain in loosely-related members, each cluster reports both `avgSimilarity` and `minSimilarity` (lowest pairwise). the report/dupes output surfaces min as a confidence tier (high >= 90%, solid >= 80%, loose < 80%) so a low-min "loose" cluster gets eyeballed before anything is closed. for very large clusters (> 100 pairs) min is a sampled lower-bound estimate
+- **canonical selection**: one `selectCanonical()` (src/canonical.ts) picks each cluster's source of truth for the report, the starmap payload, and the live triage bot alike. issue-majority clusters resolve to the earliest report (the original bug); PR-majority to the highest-quality item. fully deterministic - every tie bottoms out at item number - so re-runs name the same canonical
+- **cluster confidence**: clustering is single-linkage (BFS over pairs >= threshold) with a centroid-refinement pass to break chained mega-clusters. because single-linkage can still chain in loosely-related members, each cluster reports both `avgSimilarity` and `minSimilarity` (lowest pairwise). the report/dupes output surfaces min as a confidence tier (high >= 90%, solid >= 80%, loose < 80%) so a low-min "loose" cluster gets eyeballed before anything is closed. avg and min are computed exactly over all pairs (no sampling), so the tier a maintainer sees is reproducible run to run
 
 ## database
 
@@ -87,4 +89,4 @@ npm run ci           # lint + typecheck + test
 npm run server       # start webhook server
 ```
 
-last updated: 2026-04-07
+last updated: 2026-07-12
