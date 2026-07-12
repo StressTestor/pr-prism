@@ -98,4 +98,38 @@ describe("buildStarmapPayload", () => {
     expect(p.clusters[0].contested).toBe(true);
     expect(p.clusters[1].contested).toBe(false);
   });
+
+  it("uses canonical-aware contested for issue-majority clusters (time window, not score gap)", () => {
+    const base = Date.parse("2026-03-01T00:00:00Z");
+    const sixHours = 6 * 60 * 60 * 1000;
+    const month = 30 * 24 * 60 * 60 * 1000;
+    // two issues 6h apart with far-apart scores: the pick is a near-tie on *time*,
+    // even though the score gap is huge (old score-margin logic missed this).
+    const tight = cluster(
+      1,
+      [
+        item(10, "issue", 0.1, { createdAt: new Date(base).toISOString() }),
+        item(11, "issue", 0.9, { createdAt: new Date(base + sixHours).toISOString() }),
+      ],
+      0.93,
+      0.9,
+    );
+    // two issues a month apart with near-equal scores: a clear original by time
+    // (old score-margin logic wrongly flagged this contested).
+    const clear = cluster(
+      2,
+      [
+        item(20, "issue", 0.5, { createdAt: new Date(base).toISOString() }),
+        item(21, "issue", 0.48, { createdAt: new Date(base + month).toISOString() }),
+      ],
+      0.93,
+      0.9,
+    );
+    const p = buildStarmapPayload([tight, clear], META);
+    expect(p.clusters[0].canonical.number).toBe(10); // earliest report is canonical
+    expect(p.clusters[0].contested).toBe(true);
+    expect(p.clusters[0].runnerUp?.number).toBe(11); // second-earliest, not second-highest-score
+    expect(p.clusters[1].contested).toBe(false);
+    expect(p.clusters[1].runnerUp?.number).toBe(21);
+  });
 });

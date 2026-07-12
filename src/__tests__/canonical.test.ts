@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CanonicalCandidate } from "../canonical.js";
-import { selectCanonical } from "../canonical.js";
+import { decideCanonical, ISSUE_TIE_WINDOW_MS, selectCanonical, TIE_MARGIN } from "../canonical.js";
 
 // Minimal candidates: selectCanonical only needs type/createdAt/score/number
 // (+ optional reviewCount), decoupled from ScoredPR/DupeMatch so both callers
@@ -82,5 +82,93 @@ describe("selectCanonical", () => {
 
   it("throws on an empty candidate list", () => {
     expect(() => selectCanonical([])).toThrow();
+  });
+});
+
+describe("decideCanonical", () => {
+  it("canonical always equals selectCanonical for the same input", () => {
+    const items = [
+      c({ number: 1, type: "issue", createdAt: "2026-01-02T00:00:00Z", score: 0.9 }),
+      c({ number: 2, type: "issue", createdAt: "2026-01-01T00:00:00Z", score: 0.1 }),
+      c({ number: 3, type: "pr", score: 0.99 }),
+    ];
+    expect(decideCanonical(items).canonical.number).toBe(selectCanonical(items).number);
+  });
+
+  it("PR-majority: contested when the top two scores are within TIE_MARGIN", () => {
+    const near = [c({ number: 1, type: "pr", score: 0.61 }), c({ number: 2, type: "pr", score: 0.6 })];
+    const d = decideCanonical(near);
+    expect(d.canonical.number).toBe(1);
+    expect(d.runnerUp?.number).toBe(2);
+    expect(d.contested).toBe(true);
+    expect(TIE_MARGIN).toBe(0.05);
+  });
+
+  it("PR-majority: not contested when the score gap exceeds TIE_MARGIN", () => {
+    const clear = [c({ number: 1, type: "pr", score: 0.7 }), c({ number: 2, type: "pr", score: 0.5 })];
+    expect(decideCanonical(clear).contested).toBe(false);
+  });
+
+  it("issue-majority: contested when the two earliest reports are within the tie window, even with far-apart scores", () => {
+    // The core bug: old score-margin logic returned NOT contested here.
+    const sixHours = 6 * 60 * 60 * 1000;
+    const base = Date.parse("2026-03-01T00:00:00Z");
+    const items = [
+      c({ number: 10, type: "issue", createdAt: new Date(base).toISOString(), score: 0.1 }),
+      c({ number: 11, type: "issue", createdAt: new Date(base + sixHours).toISOString(), score: 0.9 }),
+    ];
+    const d = decideCanonical(items);
+    expect(d.canonical.number).toBe(10); // earliest report
+    expect(d.runnerUp?.number).toBe(11); // second-earliest, not second-highest-score
+    expect(d.contested).toBe(true);
+  });
+
+  it("issue-majority: not contested when the reports are far apart in time, even with near-equal scores", () => {
+    // The inverse bug: old score-margin logic returned contested here.
+    const base = Date.parse("2026-01-01T00:00:00Z");
+    const items = [
+      c({ number: 20, type: "issue", createdAt: new Date(base).toISOString(), score: 0.5 }),
+      c({
+        number: 21,
+        type: "issue",
+        createdAt: new Date(base + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        score: 0.48,
+      }),
+    ];
+    expect(decideCanonical(items).contested).toBe(false);
+    expect(ISSUE_TIE_WINDOW_MS).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it("issue-majority: contested when both reports have equal or missing createdAt (coin flip)", () => {
+    const equal = [
+      c({ number: 30, type: "issue", createdAt: "2026-01-01T00:00:00Z", score: 0.9 }),
+      c({ number: 31, type: "issue", createdAt: "2026-01-01T00:00:00Z", score: 0.1 }),
+    ];
+    expect(decideCanonical(equal).contested).toBe(true);
+    const missing = [
+      c({ number: 40, type: "issue", createdAt: undefined, score: 0.9 }),
+      c({ number: 41, type: "issue", createdAt: undefined, score: 0.1 }),
+    ];
+    expect(decideCanonical(missing).contested).toBe(true);
+  });
+
+  it("issue-majority: not contested when only one report is dated (dated one is a clear original)", () => {
+    const items = [
+      c({ number: 50, type: "issue", createdAt: "2026-01-01T00:00:00Z", score: 0.1 }),
+      c({ number: 51, type: "issue", createdAt: undefined, score: 0.9 }),
+    ];
+    const d = decideCanonical(items);
+    expect(d.canonical.number).toBe(50);
+    expect(d.contested).toBe(false);
+  });
+
+  it("single item: runnerUp is null and not contested", () => {
+    const d = decideCanonical([c({ number: 1, type: "pr", score: 0.5 })]);
+    expect(d.runnerUp).toBeNull();
+    expect(d.contested).toBe(false);
+  });
+
+  it("throws on an empty candidate list", () => {
+    expect(() => decideCanonical([])).toThrow();
   });
 });
