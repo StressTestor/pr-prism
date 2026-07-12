@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CanonicalCandidate } from "../canonical.js";
-import { decideCanonical, ISSUE_TIE_WINDOW_MS, selectCanonical, TIE_MARGIN } from "../canonical.js";
+import { decideCanonical, ISSUE_TIE_WINDOW_MS, selectCanonical, selectTracker, TIE_MARGIN } from "../canonical.js";
 
 // Minimal candidates: selectCanonical only needs type/createdAt/score/number
 // (+ optional reviewCount), decoupled from ScoredPR/DupeMatch so both callers
@@ -217,5 +217,69 @@ describe("selectCanonical state preference (merged PRs are the source of truth)"
       c({ number: 3, type: "pr", state: "merged", createdAt: "2026-03-01T00:00:00Z", score: 0.99 }),
     ];
     expect(selectCanonical(items).number).toBe(1); // merged-preference is PR-mode only
+  });
+});
+
+describe("selectTracker (tracker substrate: original bug + role-tagged candidates)", () => {
+  it("mixed cluster: tracker = earliest issue, PRs are fixes, later issue is a duplicate", () => {
+    const items = [
+      c({ number: 1, type: "issue", createdAt: "2026-01-01T00:00:00Z", score: 0.2 }),
+      c({ number: 2, type: "pr", score: 0.9 }),
+      c({ number: 3, type: "pr", score: 0.5 }),
+      c({ number: 4, type: "issue", createdAt: "2026-02-01T00:00:00Z", score: 0.8 }),
+    ];
+    const t = selectTracker(items);
+    expect(t.tracker?.number).toBe(1);
+    expect(t.needsTracker).toBe(false);
+    expect(t.candidates.map((x) => [x.item.number, x.role])).toEqual([
+      [2, "fix"],
+      [3, "fix"],
+      [4, "duplicate"],
+    ]);
+  });
+
+  it("PR-majority cluster with one issue: tracker is the issue, canonical is the best PR (they differ)", () => {
+    const items = [
+      c({ number: 10, type: "pr", score: 0.95 }),
+      c({ number: 11, type: "pr", score: 0.4 }),
+      c({ number: 12, type: "issue", createdAt: "2026-01-01T00:00:00Z", score: 0.1 }),
+    ];
+    expect(selectTracker(items).tracker?.number).toBe(12);
+    expect(selectCanonical(items).number).toBe(10);
+  });
+
+  it("pure-PR cluster: no tracker, needsTracker=true, all candidates are fixes score-desc", () => {
+    const items = [c({ number: 1, type: "pr", score: 0.5 }), c({ number: 2, type: "pr", score: 0.9 })];
+    const t = selectTracker(items);
+    expect(t.tracker).toBeNull();
+    expect(t.needsTracker).toBe(true);
+    expect(t.candidates.map((x) => x.item.number)).toEqual([2, 1]);
+    expect(t.candidates.every((x) => x.role === "fix")).toBe(true);
+  });
+
+  it("all-issues cluster: earliest is tracker, the rest are duplicates created-asc", () => {
+    const items = [
+      c({ number: 1, type: "issue", createdAt: "2026-03-01T00:00:00Z", score: 0.9 }),
+      c({ number: 2, type: "issue", createdAt: "2026-01-01T00:00:00Z", score: 0.1 }),
+      c({ number: 3, type: "issue", createdAt: "2026-02-01T00:00:00Z", score: 0.5 }),
+    ];
+    const t = selectTracker(items);
+    expect(t.tracker?.number).toBe(2);
+    expect(t.candidates.map((x) => [x.item.number, x.role])).toEqual([
+      [3, "duplicate"],
+      [1, "duplicate"],
+    ]);
+  });
+
+  it("candidate ordering is deterministic regardless of input order and does not mutate the input", () => {
+    const items = [
+      c({ number: 3, type: "pr", score: 0.5 }),
+      c({ number: 2, type: "pr", score: 0.9 }),
+      c({ number: 1, type: "issue", createdAt: "2026-01-01T00:00:00Z", score: 0.1 }),
+    ];
+    const before = items.map((i) => i.number);
+    const t = selectTracker(items);
+    expect(t.candidates.map((x) => x.item.number)).toEqual([2, 3]);
+    expect(items.map((i) => i.number)).toEqual(before);
   });
 });

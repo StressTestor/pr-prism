@@ -138,3 +138,48 @@ export function selectCanonical<T extends CanonicalCandidate>(
 ): T {
   return decideCanonical(items, opts).canonical;
 }
+
+export interface TrackerCandidate<T> {
+  item: T;
+  /** "fix" for PRs, "duplicate" for non-tracker issues. */
+  role: "fix" | "duplicate";
+}
+
+export interface TrackerDecision<T> {
+  /** The original bug: the earliest issue in the cluster, or null if none was filed. */
+  tracker: T | null;
+  /** True for a pure-PR cluster (no filed bug) - the "create a tracker issue" case. */
+  needsTracker: boolean;
+  candidates: TrackerCandidate<T>[];
+}
+
+/**
+ * Split a cluster into its tracker (the original bug = earliest issue) and the
+ * role-tagged rest: PRs are "fix" candidates, remaining issues are "duplicate"s.
+ * Distinct from selectCanonical/bestPick (which answers "which item to act on") -
+ * for a PR-majority cluster containing an issue, the tracker is that issue while
+ * the canonical is the best PR. Pure, non-mutating, deterministic.
+ */
+export function selectTracker<T extends CanonicalCandidate>(items: readonly T[]): TrackerDecision<T> {
+  const issues = items.filter((i) => i.type === "issue");
+  const tracker = issues.length > 0 ? selectCanonical(issues, { mode: "issue" }) : null;
+
+  const fixes = items
+    .filter((i) => i.type === "pr")
+    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.number - b.number));
+  const duplicates = issues
+    .filter((i) => i !== tracker)
+    .sort((a, b) => {
+      const d = createdMs(a) - createdMs(b);
+      return d !== 0 ? d : a.number - b.number;
+    });
+
+  return {
+    tracker,
+    needsTracker: tracker === null,
+    candidates: [
+      ...fixes.map((item) => ({ item, role: "fix" as const })),
+      ...duplicates.map((item) => ({ item, role: "duplicate" as const })),
+    ],
+  };
+}

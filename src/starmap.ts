@@ -1,4 +1,4 @@
-import { decideCanonical } from "./canonical.js";
+import { decideCanonical, selectTracker } from "./canonical.js";
 import { type Confidence, confidenceTier } from "./confidence.js";
 import type { Cluster } from "./types.js";
 
@@ -32,6 +32,20 @@ export interface StarmapItem extends StarmapItemRef {
   score: number;
 }
 
+export interface StarmapCandidate extends StarmapItemRef {
+  /** "fix" for PRs, "duplicate" for non-tracker issues. */
+  role: "fix" | "duplicate";
+  score: number;
+}
+
+export interface StarmapTracker {
+  /** The original bug (earliest issue); omitted for a pure-PR cluster. */
+  ref?: StarmapItemRef;
+  /** True when the cluster has no filed bug and one should be created. */
+  needsTracker: boolean;
+  candidates: StarmapCandidate[];
+}
+
 export interface StarmapCluster {
   id: string;
   index: number;
@@ -40,12 +54,16 @@ export interface StarmapCluster {
   avgSimilarity: number;
   minSimilarity: number;
   confidence: Confidence;
+  /** The item to act on (highest-quality PR / earliest issue) - "source of truth". */
   canonical: StarmapItemRef;
   contested: boolean;
   /** The rule-runner-up to canonical (the item contested is measured against), or null. */
   runnerUp: StarmapItemRef | null;
   runnerUpMargin: number | null;
   partition: { issues: StarmapItemRef[]; prs: StarmapItemRef[] };
+  /** The original bug (tracker) + role-tagged fix/duplicate candidates. Differs
+   * from canonical for a PR-majority cluster that contains an issue. */
+  tracker: StarmapTracker;
   items: StarmapItem[];
 }
 
@@ -109,6 +127,12 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
     // canonical rule (earliest-report for issue clusters), not a score sort.
     const runnerUpMargin = ranked.length >= 2 ? ranked[0].score - ranked[1].score : null;
     const decision = decideCanonical(c.items);
+    const trackerDecision = selectTracker(c.items);
+    const tracker: StarmapTracker = {
+      needsTracker: trackerDecision.needsTracker,
+      candidates: trackerDecision.candidates.map(({ item, role }) => ({ ...ref(item), role, score: item.score })),
+    };
+    if (trackerDecision.tracker) tracker.ref = ref(trackerDecision.tracker);
     const items: StarmapItem[] = ranked.map((it) => ({
       ...ref(it),
       title: it.title,
@@ -132,6 +156,7 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
         issues: items.filter((i) => i.type === "issue").map(ref),
         prs: items.filter((i) => i.type === "pr").map(ref),
       },
+      tracker,
       items,
     };
   });
