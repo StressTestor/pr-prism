@@ -1,3 +1,4 @@
+import { type Confidence, confidenceTier } from "./confidence.js";
 import type { Cluster } from "./types.js";
 
 // Machine-readable "star map" contract: a stable JSON shape for downstream
@@ -10,7 +11,10 @@ export const STARMAP_SCHEMA_VERSION = 1;
 // Top-two score gap below which the best pick is treated as a coin flip.
 const TIE_MARGIN = 0.05;
 
-export type Confidence = "high" | "solid" | "loose";
+// Confidence tiering lives in its own module now; re-exported so existing
+// importers of `./starmap.js` (cli.ts, starmap.test.ts, the payload types) keep
+// working unchanged.
+export { confidenceTier, type Confidence };
 
 export interface StarmapItemRef {
   repo: string;
@@ -69,12 +73,6 @@ export interface StarmapMeta {
   embeddingProvider: string;
   embeddingDimensions: number;
   embeddingConfigHash: string;
-}
-
-export function confidenceTier(minSimilarity: number): Confidence {
-  if (minSimilarity >= 0.9) return "high";
-  if (minSimilarity >= 0.8) return "solid";
-  return "loose";
 }
 
 function itemUrl(repo: string, type: "pr" | "issue", number: number): string {

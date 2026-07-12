@@ -10,6 +10,7 @@ import ora from "ora";
 import { runBenchmark } from "./benchmark.js";
 import { selectCanonical } from "./canonical.js";
 import { findDuplicateClusters } from "./cluster.js";
+import { confidenceTier } from "./confidence.js";
 import { getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
@@ -26,7 +27,7 @@ import {
 import { reviewPR } from "./reviewer.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
 import { cosineSimilarity } from "./similarity.js";
-import { buildStarmapPayload, confidenceTier } from "./starmap.js";
+import { buildStarmapPayload } from "./starmap.js";
 import { VectorStore } from "./store.js";
 import type { PRItem } from "./types.js";
 import { checkVisionAlignment } from "./vision.js";
