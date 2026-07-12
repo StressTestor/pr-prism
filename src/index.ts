@@ -1,7 +1,14 @@
 // Public API — pipeline functions for programmatic use
 
 export { computeClusterOverlap, runBenchmark } from "./benchmark.js";
+export { selectCanonical } from "./canonical.js";
 export { findDuplicateClusters } from "./cluster.js";
+export type { Confidence } from "./confidence.js";
+export {
+  CONFIDENCE_HIGH_MIN,
+  CONFIDENCE_SOLID_MIN,
+  confidenceTier,
+} from "./confidence.js";
 export { getRepos, getVisionDoc, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 export { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
 export { classifyFetchError, classifyHttpError, ProviderError } from "./errors.js";
