@@ -41,6 +41,7 @@ src/                    # CLI tool (published to npm as prism-triage)
   vision.ts             # chunked vision doc embedding, alignment scoring
   reviewer.ts           # multi-provider LLM review
   labels.ts             # GitHub label management with rate limiting
+  write-gate.ts         # one dry-run-by-default gate every GitHub mutation funnels through (read-only ethos)
   benchmark.ts          # embedding provider benchmark tool
   config.ts             # Zod-validated YAML + env config
   errors.ts             # typed error classes
@@ -66,7 +67,7 @@ server/                 # webhook server (GitHub App)
 - **pipeline**: scan -> embed -> cluster -> score -> vision -> review. each step is independently testable
 - **multi-provider**: embedding and LLM providers are factory-created via config. zero-cost default (ollama + opencode)
 - **incremental processing**: only re-embeds new/changed items. crash-recoverable via sqlite
-- **read-only default**: no repo modifications unless `--apply-labels` explicitly passed
+- **read-only default**: every GitHub mutation (labels, comments, closes, issue creation) funnels through one `write-gate.ts` gate that defaults to dry-run. CLI writes only under `--apply-labels`; the webhook server writes only when `PRISM_APPLY=1`. `--dry-run` always wins. (Fixes the prior leak where `ensureLabelsExist` created labels even under `--dry-run`, and the server writing unconditionally.)
 - **cross-repo**: config accepts multiple repos, dupe detection works across repo boundaries
 - **canonical selection**: one `selectCanonical()` (src/canonical.ts) picks each cluster's source of truth for the report, the starmap payload, and the live triage bot alike. issue-majority clusters resolve to the earliest report (the original bug); PR-majority to the highest-quality item. fully deterministic - every tie bottoms out at item number - so re-runs name the same canonical
 - **cluster confidence**: clustering is single-linkage (BFS over pairs >= threshold) with a centroid-refinement pass to break chained mega-clusters. because single-linkage can still chain in loosely-related members, each cluster reports both `avgSimilarity` and `minSimilarity` (lowest pairwise). the report/dupes output surfaces min as a confidence tier (high >= 90%, solid >= 80%, loose < 80%) so a low-min "loose" cluster gets eyeballed before anything is closed. avg and min are computed exactly over all pairs (no sampling), so the tier a maintainer sees is reproducible run to run

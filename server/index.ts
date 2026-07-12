@@ -8,6 +8,7 @@ import type { TriageConfig } from "./triage.js";
 import { runBacklogScan, startWeeklyDigest } from "./scheduler.js";
 import type { BacklogScanConfig } from "./scheduler.js";
 import { getRepoStatus, isRepoScanning, queueWebhook } from "./db.js";
+import { createWriteGate, resolveWriteMode } from "../src/write-gate.js";
 import {
   getInstallationOctokit,
   getInstallationToken,
@@ -52,25 +53,43 @@ async function getOctokit(installationId: number) {
  * These closures match the signatures expected by triageNewItem, runBacklogScan, and startWeeklyDigest.
  */
 function buildCallbacks(installationId: number) {
+  // Read-only by default: the server never writes unless PRISM_APPLY opts in.
+  // A deployed bot logs its intent until an operator flips this (banner logged
+  // once at startup, not here - buildCallbacks runs per webhook).
+  const gate = createWriteGate(resolveWriteMode());
+
   const postComment = async (fullName: string, number: number, body: string): Promise<void> => {
     const [owner, repo] = fullName.split("/");
-    const octokit = await getOctokit(installationId);
-    await ghPostComment(octokit, owner, repo, number, body);
-    console.log(`[github] posted comment on ${fullName}#${number}`);
+    const { applied } = await gate.guard({
+      kind: "comment",
+      target: `${fullName}#${number}`,
+      run: async () => ghPostComment(await getOctokit(installationId), owner, repo, number, body),
+    });
+    console.log(`[github] ${applied ? "posted comment on" : "(dry-run) would comment on"} ${fullName}#${number}`);
   };
 
   const closeIssue = async (fullName: string, number: number): Promise<void> => {
     const [owner, repo] = fullName.split("/");
-    const octokit = await getOctokit(installationId);
-    await ghCloseIssue(octokit, owner, repo, number);
-    console.log(`[github] closed ${fullName}#${number}`);
+    const { applied } = await gate.guard({
+      kind: "close",
+      target: `${fullName}#${number}`,
+      run: async () => ghCloseIssue(await getOctokit(installationId), owner, repo, number),
+    });
+    console.log(`[github] ${applied ? "closed" : "(dry-run) would close"} ${fullName}#${number}`);
   };
 
   const postIssue = async (fullName: string, title: string, body: string): Promise<void> => {
     const [owner, repo] = fullName.split("/");
-    const octokit = await getOctokit(installationId);
-    const num = await ghCreateIssue(octokit, owner, repo, title, body);
-    console.log(`[github] created issue ${fullName}#${num}: ${title.slice(0, 80)}`);
+    const { applied, result } = await gate.guard({
+      kind: "create-issue",
+      target: `${fullName}: ${title.slice(0, 80)}`,
+      run: async () => ghCreateIssue(await getOctokit(installationId), owner, repo, title, body),
+    });
+    console.log(
+      applied
+        ? `[github] created issue ${fullName}#${result}: ${title.slice(0, 80)}`
+        : `[github] (dry-run) would create issue on ${fullName}: ${title.slice(0, 80)}`,
+    );
   };
 
   const fetchFileContent = async (fullName: string, path: string): Promise<string | null> => {
@@ -273,21 +292,33 @@ startWeeklyDigest(
     // the weekly digest fires on a cron, not from a webhook, so we don't have
     // an installation ID in context. we need to look it up from cached tokens
     // or use the app-level API to find the installation for this repo.
+    // Gated like every other write: in dry-run we skip the whole lookup+create.
     const [owner, repo] = fullName.split("/");
+    const gate = createWriteGate(resolveWriteMode());
     try {
-      const { Octokit } = await import("@octokit/rest");
-      const { createAppAuth } = await import("@octokit/auth-app");
-      const appOctokit = new Octokit({
-        authStrategy: createAppAuth,
-        auth: { appId: serverConfig.githubAppId, privateKey },
+      const { applied, result } = await gate.guard({
+        kind: "create-issue",
+        target: `${fullName}: ${title.slice(0, 80)}`,
+        run: async () => {
+          const { Octokit } = await import("@octokit/rest");
+          const { createAppAuth } = await import("@octokit/auth-app");
+          const appOctokit = new Octokit({
+            authStrategy: createAppAuth,
+            auth: { appId: serverConfig.githubAppId, privateKey },
+          });
+          const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
+            owner,
+            repo,
+          });
+          const octokit = await getOctokit(installation.id);
+          return ghCreateIssue(octokit, owner, repo, title, body);
+        },
       });
-      const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
-        owner,
-        repo,
-      });
-      const octokit = await getOctokit(installation.id);
-      const num = await ghCreateIssue(octokit, owner, repo, title, body);
-      console.log(`[digest] created issue ${fullName}#${num}: ${title.slice(0, 80)}`);
+      console.log(
+        applied
+          ? `[digest] created issue ${fullName}#${result}: ${title.slice(0, 80)}`
+          : `[digest] (dry-run) would post digest issue to ${fullName}: ${title.slice(0, 80)}`,
+      );
     } catch (err) {
       console.error(`[digest] failed to post issue to ${fullName}:`, err);
     }
@@ -296,6 +327,9 @@ startWeeklyDigest(
 
 serve({ fetch: app.fetch, port: serverConfig.port }, (info) => {
   console.log(`pr-prism webhook server listening on port ${info.port}`);
+  if (resolveWriteMode() === "dry-run") {
+    console.log("[github] dry-run mode: writes are logged, not sent (set PRISM_APPLY=1 to apply)");
+  }
 });
 
 export { app };

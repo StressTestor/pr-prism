@@ -1,5 +1,41 @@
-import { describe, expect, it } from "vitest";
-import { restPRState } from "../github.js";
+import { describe, expect, it, vi } from "vitest";
+import { GitHubClient, restPRState } from "../github.js";
+import { createWriteGate } from "../write-gate.js";
+
+function fakeOctokit() {
+  return {
+    issues: {
+      addLabels: vi.fn(async () => ({})),
+      removeLabel: vi.fn(async () => ({})),
+      getLabel: vi.fn(async () => {
+        throw new Error("not found");
+      }),
+      createLabel: vi.fn(async () => ({})),
+    },
+  };
+}
+
+describe("GitHubClient write gate", () => {
+  it("default (dry-run) gate does not call octokit for applyLabel or ensureLabel (leak fix)", async () => {
+    const client = new GitHubClient("t", "o", "r"); // default gate is dry-run
+    const oct = fakeOctokit();
+    (client as unknown as { octokit: unknown }).octokit = oct;
+    await client.applyLabel(5, "bug");
+    await client.ensureLabel("bug", "ffffff", "desc");
+    expect(oct.issues.addLabels).not.toHaveBeenCalled();
+    expect(oct.issues.createLabel).not.toHaveBeenCalled();
+  });
+
+  it("an apply gate does call octokit", async () => {
+    const client = new GitHubClient("t", "o", "r", createWriteGate("apply"));
+    const oct = fakeOctokit();
+    (client as unknown as { octokit: unknown }).octokit = oct;
+    await client.applyLabel(5, "bug");
+    await client.ensureLabel("bug", "ffffff", "desc");
+    expect(oct.issues.addLabels).toHaveBeenCalledTimes(1);
+    expect(oct.issues.createLabel).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("restPRState (REST merged detection)", () => {
   it("maps a PR with merged_at to 'merged' (REST state is only open/closed)", () => {

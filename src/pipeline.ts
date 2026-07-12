@@ -14,6 +14,12 @@ import { cosineSimilarity, isZeroVector } from "./similarity.js";
 import { VectorStore } from "./store.js";
 import type { EmbeddingProvider, PipelineContext, PRItem, StoreItem } from "./types.js";
 import { checkVisionAlignment } from "./vision.js";
+import { createWriteGate, resolveWriteMode } from "./write-gate.js";
+
+/** One gate for a label-write block: apply only when --apply-labels and not --dry-run. */
+function labelWriteGate(opts: { applyLabels?: boolean; dryRun?: boolean }) {
+  return createWriteGate(resolveWriteMode({ apply: opts.applyLabels, dryRun: opts.dryRun }));
+}
 
 export type { PipelineContext };
 
@@ -388,7 +394,7 @@ export async function runDupes(
   );
 
   if (opts.applyLabels || opts.dryRun) {
-    const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
+    const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo, labelWriteGate(opts));
     if (opts.applyLabels) await ensureLabelsExist(github, config);
 
     const actions: LabelAction[] = [];
@@ -512,7 +518,7 @@ export async function runDupesMulti(
     const env = ctx.env;
     for (const repoStr of repos) {
       const { owner, repo } = parseRepo(repoStr);
-      const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
+      const github = new GitHubClient(env.GITHUB_TOKEN, owner, repo, labelWriteGate(opts));
       if (opts.applyLabels) await ensureLabelsExist(github, config);
 
       const actions: LabelAction[] = [];
@@ -769,7 +775,7 @@ export async function runVision(
   }
 
   if (opts.applyLabels || opts.dryRun) {
-    const labelGithub = new GitHubClient(env.GITHUB_TOKEN, owner, repo);
+    const labelGithub = new GitHubClient(env.GITHUB_TOKEN, owner, repo, labelWriteGate(opts));
     if (opts.applyLabels) await ensureLabelsExist(labelGithub, config);
 
     const actions: LabelAction[] = scores.map((s) => ({

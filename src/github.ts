@@ -2,6 +2,7 @@ import { Octokit } from "@octokit/rest";
 import { ProviderError } from "./errors.js";
 import type { VectorStore } from "./store.js";
 import type { PRItem, RateLimitInfo } from "./types.js";
+import { createWriteGate, type WriteGate } from "./write-gate.js";
 
 export interface FetchOptions {
   since?: string;
@@ -46,10 +47,15 @@ export class GitHubClient {
   // Initial rate limit is an estimate — actual values are populated after the first API response
   private rateLimit: RateLimitInfo = { remaining: 5000, limit: 5000, resetAt: new Date() };
 
-  constructor(token: string, owner: string, repo: string) {
+  private gate: WriteGate;
+
+  // gate defaults to dry-run: a GitHubClient never mutates the repo unless a
+  // caller explicitly hands it an "apply" gate. This is the read-only ethos.
+  constructor(token: string, owner: string, repo: string, gate: WriteGate = createWriteGate("dry-run")) {
     this.octokit = new Octokit({ auth: token });
     this.owner = owner;
     this.repo = repo;
+    this.gate = gate;
   }
 
   getRateLimit(): RateLimitInfo {
@@ -583,26 +589,36 @@ export class GitHubClient {
   }
 
   async applyLabel(number: number, label: string): Promise<void> {
-    await this.withBackoff(() =>
-      this.octokit.issues.addLabels({
-        owner: this.owner,
-        repo: this.repo,
-        issue_number: number,
-        labels: [label],
-      }),
-    );
+    await this.gate.guard({
+      kind: "label",
+      target: `#${number} +${label}`,
+      run: () =>
+        this.withBackoff(() =>
+          this.octokit.issues.addLabels({
+            owner: this.owner,
+            repo: this.repo,
+            issue_number: number,
+            labels: [label],
+          }),
+        ),
+    });
   }
 
   async removeLabel(number: number, label: string): Promise<void> {
     try {
-      await this.withBackoff(() =>
-        this.octokit.issues.removeLabel({
-          owner: this.owner,
-          repo: this.repo,
-          issue_number: number,
-          name: label,
-        }),
-      );
+      await this.gate.guard({
+        kind: "label",
+        target: `#${number} -${label}`,
+        run: () =>
+          this.withBackoff(() =>
+            this.octokit.issues.removeLabel({
+              owner: this.owner,
+              repo: this.repo,
+              issue_number: number,
+              name: label,
+            }),
+          ),
+      });
     } catch {
       // Label might not exist
     }
@@ -616,12 +632,17 @@ export class GitHubClient {
         name: label,
       });
     } catch {
-      await this.octokit.issues.createLabel({
-        owner: this.owner,
-        repo: this.repo,
-        name: label,
-        color,
-        description,
+      await this.gate.guard({
+        kind: "label-ensure",
+        target: label,
+        run: () =>
+          this.octokit.issues.createLabel({
+            owner: this.owner,
+            repo: this.repo,
+            name: label,
+            color,
+            description,
+          }),
       });
     }
   }
