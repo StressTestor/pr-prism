@@ -292,21 +292,33 @@ startWeeklyDigest(
     // the weekly digest fires on a cron, not from a webhook, so we don't have
     // an installation ID in context. we need to look it up from cached tokens
     // or use the app-level API to find the installation for this repo.
+    // Gated like every other write: in dry-run we skip the whole lookup+create.
     const [owner, repo] = fullName.split("/");
+    const gate = createWriteGate(resolveWriteMode());
     try {
-      const { Octokit } = await import("@octokit/rest");
-      const { createAppAuth } = await import("@octokit/auth-app");
-      const appOctokit = new Octokit({
-        authStrategy: createAppAuth,
-        auth: { appId: serverConfig.githubAppId, privateKey },
+      const { applied, result } = await gate.guard({
+        kind: "create-issue",
+        target: `${fullName}: ${title.slice(0, 80)}`,
+        run: async () => {
+          const { Octokit } = await import("@octokit/rest");
+          const { createAppAuth } = await import("@octokit/auth-app");
+          const appOctokit = new Octokit({
+            authStrategy: createAppAuth,
+            auth: { appId: serverConfig.githubAppId, privateKey },
+          });
+          const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
+            owner,
+            repo,
+          });
+          const octokit = await getOctokit(installation.id);
+          return ghCreateIssue(octokit, owner, repo, title, body);
+        },
       });
-      const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
-        owner,
-        repo,
-      });
-      const octokit = await getOctokit(installation.id);
-      const num = await ghCreateIssue(octokit, owner, repo, title, body);
-      console.log(`[digest] created issue ${fullName}#${num}: ${title.slice(0, 80)}`);
+      console.log(
+        applied
+          ? `[digest] created issue ${fullName}#${result}: ${title.slice(0, 80)}`
+          : `[digest] (dry-run) would post digest issue to ${fullName}: ${title.slice(0, 80)}`,
+      );
     } catch (err) {
       console.error(`[digest] failed to post issue to ${fullName}:`, err);
     }
