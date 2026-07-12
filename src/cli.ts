@@ -14,6 +14,7 @@ import { confidenceTier } from "./confidence.js";
 import { getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
+import { buildHousekeepingManifest } from "./housekeeping.js";
 import { findConfirmedDuplicates } from "./identity.js";
 import { applyEmbeddingKey, detectRepoFromGit, injectRepoIntoConfig, resolveInitRepo, verifyInit } from "./init.js";
 import {
@@ -454,6 +455,10 @@ program
     "--starmap <path>",
     "Also write a stable star-map JSON contract (clusters + confidence + join keys) to <path>",
   )
+  .option(
+    "--housekeeping <path>",
+    "Also write an editable housekeeping to-do (tracker + close checklist, no auto-writes) to <path>",
+  )
   .action(async (opts) => {
     if (opts.json && opts.output) {
       console.error(chalk.red("Cannot use --json and --output together"));
@@ -541,6 +546,19 @@ program
           );
           writeFileSync(opts.starmap, `${JSON.stringify(payload, null, 2)}\n`);
           console.log(chalk.green(`★ star-map JSON written to ${opts.starmap} (${payload.clusterCount} clusters)`));
+        }
+
+        if (opts.housekeeping) {
+          const allItems = (isMultiRepo
+            ? ctx.store.getAllItemsMulti(repos)
+            : ctx.store.getAllItems(ctx.repoFull)) as unknown as PRItem[];
+          const confirmed = findConfirmedDuplicates(allItems, { store: ctx.store });
+          const manifest = buildHousekeepingManifest(clusters, {
+            repo: isMultiRepo ? repos.join(", ") : ctx.repoFull,
+            confirmed,
+          });
+          writeFileSync(opts.housekeeping, manifest);
+          console.log(chalk.green(`✓ housekeeping manifest written to ${opts.housekeeping}`));
         }
       }
     } finally {
