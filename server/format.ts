@@ -1,3 +1,4 @@
+import { escapeTableCell } from "../src/sanitize.js";
 import type { OwnerSuggestion } from "./routing.js";
 
 export interface DupeMatch {
@@ -29,10 +30,7 @@ export function formatTriageComment(
   owners?: OwnerSuggestion[],
 ): string {
   const rows = matches
-    .map(
-      (m) =>
-        `| [#${m.number}](${issueUrl(repo, m.number)}) | ${pct(m.similarity)}% | ${m.title} |`,
-    )
+    .map((m) => `| [#${m.number}](${issueUrl(repo, m.number)}) | ${pct(m.similarity)}% | ${escapeTableCell(m.title)} |`)
     .join("\n");
 
   const elapsed = (elapsedMs / 1000).toFixed(1);
@@ -48,9 +46,7 @@ ${rows}
 **source of truth:** [#${source.number}](${issueUrl(repo, source.number)}) — close this as duplicate if appropriate.`;
 
   if (owners && owners.length > 0) {
-    const ownerList = owners
-      .map((o) => `@${o.login} (${o.reason})`)
-      .join(", ");
+    const ownerList = owners.map((o) => `@${o.login} (${o.reason})`).join(", ");
     comment += `\n\n**suggested reviewers:** ${ownerList}`;
   }
 
@@ -62,11 +58,7 @@ ${rows}
 /**
  * Format the auto-close comment posted when similarity exceeds the auto-close threshold.
  */
-export function formatAutoCloseComment(
-  repo: string,
-  source: DupeMatch,
-  similarity: number,
-): string {
+export function formatAutoCloseComment(repo: string, source: DupeMatch, similarity: number): string {
   return `closing as duplicate of [#${source.number}](${issueUrl(repo, source.number)}) (${pct(similarity)}% similar).
 
 *auto-closed by [pr-prism](https://github.com/StressTestor/pr-prism)*`;

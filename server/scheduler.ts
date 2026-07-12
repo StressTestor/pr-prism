@@ -1,11 +1,19 @@
 import cron from "node-cron";
+import { findDuplicateClusters } from "../src/cluster.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "../src/embeddings.js";
 import { GitHubClient } from "../src/github.js";
-import { findDuplicateClusters } from "../src/cluster.js";
-import type { PRItem, StoreItem, Cluster } from "../src/types.js";
-import { drainWebhookQueue, getItemCountSince, getRepoStatus, listInstalledRepos, openRepoDB, setRepoScanning } from "./db.js";
-import { triageNewItem } from "./triage.js";
+import { escapeTableCell } from "../src/sanitize.js";
+import type { Cluster, PRItem, StoreItem } from "../src/types.js";
+import {
+  drainWebhookQueue,
+  getItemCountSince,
+  getRepoStatus,
+  listInstalledRepos,
+  openRepoDB,
+  setRepoScanning,
+} from "./db.js";
 import type { TriageConfig } from "./triage.js";
+import { triageNewItem } from "./triage.js";
 import type { WebhookEvent } from "./webhook.js";
 
 export interface BacklogScanConfig {
@@ -19,12 +27,7 @@ export interface BacklogScanConfig {
  * Format cluster data into a GitHub issue body for the initial triage report.
  * Reuses the verbose report format: summary table + expanded clusters.
  */
-function formatTriageReport(
-  owner: string,
-  repo: string,
-  totalItems: number,
-  clusters: Cluster[],
-): string {
+function formatTriageReport(owner: string, repo: string, totalItems: number, clusters: Cluster[]): string {
   const fullName = `${owner}/${repo}`;
   const totalDupes = clusters.reduce((s, c) => s + c.items.length, 0);
 
@@ -43,7 +46,7 @@ function formatTriageReport(
   body += `|---|------|---------------|-----------|-------|\n`;
 
   for (const c of clusters) {
-    const theme = c.theme.replace(/\|/g, "\\|").slice(0, 60);
+    const theme = escapeTableCell(c.theme, 60);
     body += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | [#${c.bestPick.number}](https://github.com/${fullName}/issues/${c.bestPick.number}) | ${theme} |\n`;
   }
 
@@ -52,14 +55,14 @@ function formatTriageReport(
   body += `\n## cluster details\n\n`;
 
   for (const c of showClusters) {
-    body += `### cluster ${c.id}: ${c.theme.slice(0, 80)}\n\n`;
+    body += `### cluster ${c.id}: ${escapeTableCell(c.theme, 80)}\n\n`;
     body += `avg similarity: ${(c.avgSimilarity * 100).toFixed(1)}% | best pick: #${c.bestPick.number}\n\n`;
     body += `| # | type | title | score |\n`;
     body += `|---|------|-------|-------|\n`;
 
     for (const item of c.items) {
       const link = `[#${item.number}](https://github.com/${fullName}/issues/${item.number})`;
-      body += `| ${link} | ${item.type} | ${item.title.replace(/\|/g, "\\|").slice(0, 60)} | ${item.score.toFixed(2)} |\n`;
+      body += `| ${link} | ${item.type} | ${escapeTableCell(item.title, 60)} | ${item.score.toFixed(2)} |\n`;
     }
 
     body += `\n`;
@@ -142,9 +145,7 @@ export async function runBacklogScan(
             const msg = err.message || "";
             if (attempt < 2) {
               const wait = msg.includes("429") ? 60 * (attempt + 1) : 5;
-              console.warn(
-                `[backlog] ${fullName}: embed batch failed (${msg.slice(0, 60)}), retrying in ${wait}s...`,
-              );
+              console.warn(`[backlog] ${fullName}: embed batch failed (${msg.slice(0, 60)}), retrying in ${wait}s...`);
               await new Promise((r) => setTimeout(r, wait * 1000));
             } else {
               throw err;
@@ -224,12 +225,16 @@ export async function runBacklogScan(
       autoCloseThreshold: 0.95,
     };
 
-    const postComment = callbacks?.postComment ?? (async (repo: string, number: number, body: string): Promise<void> => {
-      console.log(`[triage] would post comment on ${repo}#${number}:\n${body}`);
-    });
-    const closeIssue = callbacks?.closeIssue ?? (async (repo: string, number: number): Promise<void> => {
-      console.log(`[triage] would close ${repo}#${number}`);
-    });
+    const postComment =
+      callbacks?.postComment ??
+      (async (repo: string, number: number, body: string): Promise<void> => {
+        console.log(`[triage] would post comment on ${repo}#${number}:\n${body}`);
+      });
+    const closeIssue =
+      callbacks?.closeIssue ??
+      (async (repo: string, number: number): Promise<void> => {
+        console.log(`[triage] would close ${repo}#${number}`);
+      });
 
     for (const event of queued) {
       try {
@@ -278,10 +283,7 @@ export function getLastMonday(now?: Date): string {
 /**
  * Format a weekly digest issue body from repo digest data.
  */
-export function formatWeeklyDigest(
-  repos: RepoDigestData[],
-  weekOf: string,
-): string {
+export function formatWeeklyDigest(repos: RepoDigestData[], weekOf: string): string {
   const totalNew = repos.reduce((s, r) => s + r.newItemsThisWeek, 0);
   const totalItems = repos.reduce((s, r) => s + r.totalItems, 0);
   const totalClusters = repos.reduce((s, r) => s + r.clusterCount, 0);
@@ -316,7 +318,7 @@ export function formatWeeklyDigest(
       body += `| # | size | avg similarity | theme |\n`;
       body += `|---|------|---------------|-------|\n`;
       for (const c of r.biggestClusters.slice(0, 5)) {
-        const theme = c.theme.replace(/\|/g, "\\|").slice(0, 60);
+        const theme = escapeTableCell(c.theme, 60);
         body += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | ${theme} |\n`;
       }
     }
@@ -337,93 +339,97 @@ export function startWeeklyDigest(
   postIssue: (repo: string, title: string, body: string) => Promise<void>,
 ): void {
   // Monday at 9:00 AM UTC: minute hour day-of-month month day-of-week
-  cron.schedule("0 9 * * 1", async () => {
-    console.log("[digest] running weekly digest...");
+  cron.schedule(
+    "0 9 * * 1",
+    async () => {
+      console.log("[digest] running weekly digest...");
 
-    try {
-      const repos = listInstalledRepos(config.dataDir);
-      if (repos.length === 0) {
-        console.log("[digest] no installed repos, skipping");
-        return;
-      }
+      try {
+        const repos = listInstalledRepos(config.dataDir);
+        if (repos.length === 0) {
+          console.log("[digest] no installed repos, skipping");
+          return;
+        }
 
-      const lastMonday = getLastMonday();
-      const digestData: RepoDigestData[] = [];
+        const lastMonday = getLastMonday();
+        const digestData: RepoDigestData[] = [];
 
-      for (const { owner, repo } of repos) {
-        const fullName = `${owner}/${repo}`;
-        try {
-          const status = getRepoStatus(config.dataDir, owner, repo);
-          const newItems = getItemCountSince(config.dataDir, owner, repo, lastMonday);
-
-          // run clustering to get current cluster state
-          let clusters: Cluster[] = [];
+        for (const { owner, repo } of repos) {
+          const fullName = `${owner}/${repo}`;
           try {
-            const store = openRepoDB(config.dataDir, owner, repo);
+            const status = getRepoStatus(config.dataDir, owner, repo);
+            const newItems = getItemCountSince(config.dataDir, owner, repo, lastMonday);
+
+            // run clustering to get current cluster state
+            let clusters: Cluster[] = [];
             try {
-              const items = store.getAllItems(fullName) as unknown as PRItem[];
-              if (items.length > 0) {
-                clusters = findDuplicateClusters(store, items, {
-                  threshold: config.similarityThreshold,
-                  repo: fullName,
-                });
+              const store = openRepoDB(config.dataDir, owner, repo);
+              try {
+                const items = store.getAllItems(fullName) as unknown as PRItem[];
+                if (items.length > 0) {
+                  clusters = findDuplicateClusters(store, items, {
+                    threshold: config.similarityThreshold,
+                    repo: fullName,
+                  });
+                }
+              } finally {
+                store.close();
               }
-            } finally {
-              store.close();
+            } catch (err) {
+              console.warn(`[digest] ${fullName}: clustering failed:`, err);
             }
+
+            // sort clusters by size descending for "biggest unresolved"
+            const sorted = [...clusters].sort((a, b) => b.items.length - a.items.length);
+
+            digestData.push({
+              owner,
+              repo,
+              totalItems: status.itemCount,
+              embeddingCount: status.embeddingCount,
+              newItemsThisWeek: newItems,
+              clusterCount: clusters.length,
+              biggestClusters: sorted.slice(0, 5),
+              autoClosed: 0, // TODO: track auto-close count when auto-close is enabled
+            });
           } catch (err) {
-            console.warn(`[digest] ${fullName}: clustering failed:`, err);
+            console.error(`[digest] error processing ${fullName}:`, err);
           }
-
-          // sort clusters by size descending for "biggest unresolved"
-          const sorted = [...clusters].sort((a, b) => b.items.length - a.items.length);
-
-          digestData.push({
-            owner,
-            repo,
-            totalItems: status.itemCount,
-            embeddingCount: status.embeddingCount,
-            newItemsThisWeek: newItems,
-            clusterCount: clusters.length,
-            biggestClusters: sorted.slice(0, 5),
-            autoClosed: 0, // TODO: track auto-close count when auto-close is enabled
-          });
-        } catch (err) {
-          console.error(`[digest] error processing ${fullName}:`, err);
         }
-      }
 
-      if (digestData.length === 0) {
-        console.log("[digest] no repo data collected, skipping");
-        return;
-      }
-
-      const weekOf = getLastMonday();
-      const weekLabel = weekOf.slice(0, 10); // YYYY-MM-DD
-      const body = formatWeeklyDigest(digestData, weekOf);
-      const title = `pr-prism weekly digest — week of ${weekLabel}`;
-
-      // post to each repo that had activity, or to the first repo if no activity
-      const activeRepos = digestData.filter((r) => r.newItemsThisWeek > 0);
-      const targets = activeRepos.length > 0 ? activeRepos : [digestData[0]];
-
-      for (const r of targets) {
-        const fullName = `${r.owner}/${r.repo}`;
-        try {
-          await postIssue(fullName, title, body);
-          console.log(`[digest] posted weekly digest to ${fullName}`);
-        } catch (err) {
-          console.error(`[digest] failed to post digest to ${fullName}:`, err);
+        if (digestData.length === 0) {
+          console.log("[digest] no repo data collected, skipping");
+          return;
         }
-      }
 
-      console.log("[digest] weekly digest complete");
-    } catch (err) {
-      console.error("[digest] weekly digest failed:", err);
-    }
-  }, {
-    timezone: "UTC",
-  });
+        const weekOf = getLastMonday();
+        const weekLabel = weekOf.slice(0, 10); // YYYY-MM-DD
+        const body = formatWeeklyDigest(digestData, weekOf);
+        const title = `pr-prism weekly digest — week of ${weekLabel}`;
+
+        // post to each repo that had activity, or to the first repo if no activity
+        const activeRepos = digestData.filter((r) => r.newItemsThisWeek > 0);
+        const targets = activeRepos.length > 0 ? activeRepos : [digestData[0]];
+
+        for (const r of targets) {
+          const fullName = `${r.owner}/${r.repo}`;
+          try {
+            await postIssue(fullName, title, body);
+            console.log(`[digest] posted weekly digest to ${fullName}`);
+          } catch (err) {
+            console.error(`[digest] failed to post digest to ${fullName}:`, err);
+          }
+        }
+
+        console.log("[digest] weekly digest complete");
+      } catch (err) {
+        console.error("[digest] weekly digest failed:", err);
+      }
+    },
+    {
+      timezone: "UTC",
+    },
+  );
 
   console.log("[digest] weekly digest cron scheduled (Monday 9:00 AM UTC)");
 }

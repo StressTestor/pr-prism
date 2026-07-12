@@ -1,5 +1,6 @@
 import { decideCanonical, selectTracker } from "./canonical.js";
 import { type Confidence, confidenceTier } from "./confidence.js";
+import { sanitizeTitle } from "./sanitize.js";
 import type { Cluster } from "./types.js";
 
 // Machine-readable "star map" contract: a stable JSON shape for downstream
@@ -135,7 +136,7 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
     if (trackerDecision.tracker) tracker.ref = ref(trackerDecision.tracker);
     const items: StarmapItem[] = ranked.map((it) => ({
       ...ref(it),
-      title: it.title,
+      title: sanitizeTitle(it.title),
       author: it.author,
       updatedAt: it.updatedAt,
       score: it.score,
@@ -143,7 +144,7 @@ export function buildStarmapPayload(clusters: Cluster[], meta: StarmapMeta): Sta
     return {
       id: `t${meta.threshold.toString().replace(".", "")}-cluster-${c.id}`,
       index: c.id,
-      theme: c.theme,
+      theme: sanitizeTitle(c.theme),
       size: c.items.length,
       avgSimilarity: c.avgSimilarity,
       minSimilarity: c.minSimilarity,
