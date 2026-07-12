@@ -171,4 +171,51 @@ describe("decideCanonical", () => {
   it("throws on an empty candidate list", () => {
     expect(() => decideCanonical([])).toThrow();
   });
+
+  it("PR-mode: a merged canonical over an open runner-up is a clear winner, not contested", () => {
+    const items = [
+      c({ number: 1, type: "pr", state: "open", score: 0.95 }),
+      c({ number: 2, type: "pr", state: "merged", score: 0.4 }),
+    ];
+    const d = decideCanonical(items);
+    expect(d.canonical.number).toBe(2);
+    expect(d.contested).toBe(false); // decided by lifecycle state, not a score coin flip
+  });
+});
+
+describe("selectCanonical state preference (merged PRs are the source of truth)", () => {
+  it("PR-majority: a merged PR wins canonical over a higher-scored open PR", () => {
+    const items = [
+      c({ number: 1, type: "pr", state: "open", score: 0.9 }),
+      c({ number: 2, type: "pr", state: "merged", score: 0.4 }),
+    ];
+    expect(selectCanonical(items).number).toBe(2);
+  });
+
+  it("state priority is merged > open > closed-unmerged at equal score", () => {
+    const openVsClosed = [
+      c({ number: 1, type: "pr", state: "closed", score: 0.5 }),
+      c({ number: 2, type: "pr", state: "open", score: 0.5 }),
+    ];
+    expect(selectCanonical(openVsClosed).number).toBe(2); // open beats closed-unmerged
+    const mergedVsOpen = [
+      c({ number: 3, type: "pr", state: "open", score: 0.9 }),
+      c({ number: 4, type: "pr", state: "merged", score: 0.9 }),
+    ];
+    expect(selectCanonical(mergedVsOpen).number).toBe(4);
+  });
+
+  it("no-state candidates resolve exactly as before (triage fall-through)", () => {
+    const items = [c({ number: 1, type: "pr", score: 0.5 }), c({ number: 2, type: "pr", score: 0.9 })];
+    expect(selectCanonical(items).number).toBe(2); // highest score, unchanged
+  });
+
+  it("issue-majority still picks the earliest report even when a merged PR is present", () => {
+    const items = [
+      c({ number: 1, type: "issue", createdAt: "2026-01-01T00:00:00Z", score: 0.1 }),
+      c({ number: 2, type: "issue", createdAt: "2026-02-01T00:00:00Z", score: 0.9 }),
+      c({ number: 3, type: "pr", state: "merged", createdAt: "2026-03-01T00:00:00Z", score: 0.99 }),
+    ];
+    expect(selectCanonical(items).number).toBe(1); // merged-preference is PR-mode only
+  });
 });

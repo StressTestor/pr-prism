@@ -15,6 +15,15 @@ function hasTestFiles(filenames: string[]): boolean {
   return filenames.some((f) => /test|spec|__tests__/i.test(f));
 }
 
+/**
+ * Normalize a REST PR's state to open/closed/merged. The REST `state` field is
+ * only "open"|"closed" and never "merged", so a merged PR looks "closed" unless
+ * we consult `merged_at`. (The GraphQL path already returns MERGED directly.)
+ */
+export function restPRState(pr: { state: string; merged_at?: string | null }): string {
+  return pr.merged_at ? "merged" : pr.state;
+}
+
 function mapCIStatus(state: string | null | undefined): PRItem["ciStatus"] {
   switch (state) {
     case "SUCCESS":
@@ -373,7 +382,7 @@ export class GitHubClient {
           repo: `${this.owner}/${this.repo}`,
           title: pr.title,
           body: pr.body || "",
-          state: pr.state,
+          state: restPRState(pr),
           author: pr.user?.login || "unknown",
           createdAt: pr.created_at,
           nodeId: pr.node_id,
@@ -462,7 +471,7 @@ export class GitHubClient {
       repo: `${this.owner}/${this.repo}`,
       title: pr.title,
       body: pr.body || "",
-      state: pr.state,
+      state: restPRState(pr),
       author: pr.user?.login || "unknown",
       createdAt: pr.created_at,
       updatedAt: pr.updated_at,

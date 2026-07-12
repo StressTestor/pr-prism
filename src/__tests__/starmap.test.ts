@@ -99,6 +99,21 @@ describe("buildStarmapPayload", () => {
     expect(p.clusters[1].contested).toBe(false);
   });
 
+  it("carries item state onto canonical/items/partition and prefers a merged canonical", () => {
+    const c = cluster(1, [item(1, "pr", 0.9, { state: "open" }), item(2, "pr", 0.4, { state: "merged" })], 0.93, 0.9);
+    const out = buildStarmapPayload([c], META).clusters[0];
+    expect(out.canonical.number).toBe(2); // merged PR is the source of truth
+    expect(out.canonical.state).toBe("merged");
+    expect(out.items.find((i) => i.number === 1)?.state).toBe("open");
+    expect(out.partition.prs.find((r) => r.number === 2)?.state).toBe("merged");
+  });
+
+  it("omits state from a ref when the source item has no state", () => {
+    const c = cluster(1, [item(1, "pr", 0.6, { state: "" }), item(2, "pr", 0.5, { state: "" })], 0.93, 0.9);
+    const out = buildStarmapPayload([c], META).clusters[0];
+    expect("state" in out.canonical).toBe(false);
+  });
+
   it("uses canonical-aware contested for issue-majority clusters (time window, not score gap)", () => {
     const base = Date.parse("2026-03-01T00:00:00Z");
     const sixHours = 6 * 60 * 60 * 1000;
