@@ -150,6 +150,11 @@ prism dupes --dry-run           # preview first
 
 read-only by default. always.
 
+every github write (labels, comments, closes, issue creation) funnels through one
+gate that defaults to dry-run. the CLI writes only under `--apply-labels`. the
+webhook server writes only when `PRISM_APPLY=1` is set - without it a deployed bot
+logs what it *would* do instead of touching the repo. `--dry-run` always wins.
+
 ## github action
 
 run pr-prism automatically on every PR:
