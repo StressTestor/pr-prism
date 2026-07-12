@@ -114,6 +114,43 @@ describe("buildStarmapPayload", () => {
     expect("state" in out.canonical).toBe(false);
   });
 
+  it("emits a tracker: earliest issue as tracker.ref, PRs as fix candidates, later issue as duplicate", () => {
+    const c = cluster(
+      1,
+      [
+        item(1, "issue", 0.2, { createdAt: "2026-01-01T00:00:00Z", nodeId: "I_1" }),
+        item(2, "pr", 0.9),
+        item(3, "issue", 0.8, { createdAt: "2026-02-01T00:00:00Z" }),
+      ],
+      0.93,
+      0.9,
+    );
+    const out = buildStarmapPayload([c], META).clusters[0];
+    expect(out.tracker.needsTracker).toBe(false);
+    expect(out.tracker.ref?.number).toBe(1);
+    expect(out.tracker.ref?.url).toBe("https://github.com/acme/widgets/issues/1");
+    expect(out.tracker.ref?.nodeId).toBe("I_1");
+    expect(out.tracker.candidates.map((x) => [x.number, x.role])).toEqual([
+      [2, "fix"],
+      [3, "duplicate"],
+    ]);
+    expect(out.tracker.candidates.find((x) => x.number === 2)?.url).toBe("https://github.com/acme/widgets/pull/2");
+  });
+
+  it("tracker.needsTracker is true (ref omitted) for a pure-PR cluster; canonical still equals bestPick", () => {
+    // PR-majority cluster that contains an issue: canonical (act-on) is the best PR,
+    // tracker (original bug) is the issue - they intentionally differ.
+    const c = cluster(7, [item(10, "pr", 0.95), item(11, "pr", 0.4), item(12, "issue", 0.1)], 0.93, 0.9);
+    const out = buildStarmapPayload([c], META).clusters[0];
+    expect(out.canonical.number).toBe(10); // bestPick / source of truth
+    expect(out.tracker.ref?.number).toBe(12); // original bug != canonical
+    const purePr = cluster(8, [item(20, "pr", 0.9), item(21, "pr", 0.5)], 0.93, 0.9);
+    const outPr = buildStarmapPayload([purePr], META).clusters[0];
+    expect(outPr.tracker.needsTracker).toBe(true);
+    expect(outPr.tracker.ref).toBeUndefined();
+    expect(outPr.tracker.candidates.every((x) => x.role === "fix")).toBe(true);
+  });
+
   it("uses canonical-aware contested for issue-majority clusters (time window, not score gap)", () => {
     const base = Date.parse("2026-03-01T00:00:00Z");
     const sixHours = 6 * 60 * 60 * 1000;
