@@ -14,6 +14,11 @@ const ScoringWeightsSchema = z.object({
   review_approvals: z.number().default(0.1),
 });
 
+// Single source of truth for the scoring weights. scorer.ts uses the (possibly
+// overridden) config weights; the clustering scorer, which has no config in
+// scope, uses these defaults so the two don't drift into separate tables.
+export const DEFAULT_SCORING_WEIGHTS = ScoringWeightsSchema.parse({});
+
 const ThresholdsSchema = z.object({
   duplicate_similarity: z.number().default(0.85),
   aligned: z.number().default(0.65),

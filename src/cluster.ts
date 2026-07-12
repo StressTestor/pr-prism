@@ -1,15 +1,11 @@
+import { selectCanonical } from "./canonical.js";
+import { DEFAULT_SCORING_WEIGHTS } from "./config.js";
 import { normalizeDescriptionQuality, normalizeDiffSize } from "./scorer.js";
 import { cosineSimilarity, isZeroVector } from "./similarity.js";
 import type { VectorStore } from "./store.js";
 import type { Cluster, PRItem, ScoredPR, ScoreSignals } from "./types.js";
 
 export { cosineSimilarity } from "./similarity.js";
-
-function recencyFactor(updatedAt: string): number {
-  const ageMs = Date.now() - new Date(updatedAt).getTime();
-  const ageDays = ageMs / (1000 * 60 * 60 * 24);
-  return 0.5 ** (ageDays / 30);
-}
 
 export interface ClusterOptions {
   threshold: number;
@@ -137,27 +133,44 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
       }
     }
 
+    // Re-absorb ejected items that still have a direct >= threshold edge to a
+    // kept member. They are genuine duplicates pulling the centroid off-center,
+    // not chain outliers, and dropping them is how legitimate members vanished
+    // (e.g. issue #5297). Edges are checked against the original kept core so a
+    // re-absorbed item can't cascade in more.
+    const originalKept = [...kept];
+    const trulyEjected: string[] = [];
+    for (const eid of ejected) {
+      const emb = embeddings.get(eid)!;
+      const linkedToKept = originalKept.some((kid) => cosineSimilarity(emb, embeddings.get(kid)!) >= opts.threshold);
+      if (linkedToKept) {
+        kept.push(eid);
+      } else {
+        trulyEjected.push(eid);
+      }
+    }
+
     if (kept.length >= 2) {
       refinedComponents.push(kept);
     }
 
-    // Re-cluster ejected items among themselves (they might form smaller coherent groups)
-    if (ejected.length >= 2) {
+    // Re-cluster the remaining chain-outlier items among themselves.
+    if (trulyEjected.length >= 2) {
       const ejectedAdj = new Map<string, Set<string>>();
-      for (let i = 0; i < ejected.length; i++) {
-        for (let j = i + 1; j < ejected.length; j++) {
-          const sim = cosineSimilarity(embeddings.get(ejected[i])!, embeddings.get(ejected[j])!);
+      for (let i = 0; i < trulyEjected.length; i++) {
+        for (let j = i + 1; j < trulyEjected.length; j++) {
+          const sim = cosineSimilarity(embeddings.get(trulyEjected[i])!, embeddings.get(trulyEjected[j])!);
           if (sim >= opts.threshold) {
-            if (!ejectedAdj.has(ejected[i])) ejectedAdj.set(ejected[i], new Set());
-            if (!ejectedAdj.has(ejected[j])) ejectedAdj.set(ejected[j], new Set());
-            ejectedAdj.get(ejected[i])!.add(ejected[j]);
-            ejectedAdj.get(ejected[j])!.add(ejected[i]);
+            if (!ejectedAdj.has(trulyEjected[i])) ejectedAdj.set(trulyEjected[i], new Set());
+            if (!ejectedAdj.has(trulyEjected[j])) ejectedAdj.set(trulyEjected[j], new Set());
+            ejectedAdj.get(trulyEjected[i])!.add(trulyEjected[j]);
+            ejectedAdj.get(trulyEjected[j])!.add(trulyEjected[i]);
           }
         }
       }
-      // BFS on ejected items
+      // BFS on the chain-outlier items
       const ejVisited = new Set<string>();
-      for (const eid of ejected) {
+      for (const eid of trulyEjected) {
         if (ejVisited.has(eid) || !ejectedAdj.has(eid)) continue;
         const subComp: string[] = [];
         const q = [eid];
@@ -183,29 +196,32 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
       .map((cid) => {
         const item = itemMap.get(cid);
         if (!item) return null;
-        const recency = recencyFactor(item.updatedAt);
         const hasTests = item.hasTests === true ? 1.0 : item.hasTests === false ? 0.0 : 0.5;
         const ciPassing = item.ciStatus === "success" ? 1 : item.ciStatus === "failure" ? 0 : 0.5;
         const descQuality = normalizeDescriptionQuality(item.body || "", (item.body || "").length);
         const reviewApprovals = Math.min(1.0, (item.reviewCount || 0) / 3);
         const hasDiff = item.additions != null && item.deletions != null;
         const diffSize = hasDiff ? normalizeDiffSize(item.additions || 0, item.deletions || 0) : 0.5;
+        const authorHistory = 0.5; // no GitHub context available in clustering
         const signals: ScoreSignals = {
           hasTests,
           ciPassing,
           diffSize: hasDiff ? diffSize : -1,
-          authorHistory: 0.5, // no GitHub context available in clustering
+          authorHistory,
           descriptionQuality: descQuality,
           reviewApprovals,
-          recency,
         };
+        // Quality-only, using the shared weights so the pick is reproducible and
+        // stays aligned with the ranked scorer. Recency is deliberately not
+        // scored, so canonical isn't biased toward the most recently touched dup.
+        const w = DEFAULT_SCORING_WEIGHTS;
         const score =
-          hasTests * 0.25 +
-          ciPassing * 0.2 +
-          diffSize * 0.15 +
-          descQuality * 0.15 +
-          reviewApprovals * 0.1 +
-          recency * 0.15;
+          hasTests * w.has_tests +
+          ciPassing * w.ci_passing +
+          diffSize * w.diff_size_penalty +
+          descQuality * w.description_quality +
+          reviewApprovals * w.review_approvals +
+          authorHistory * w.author_history;
         return { ...item, score, signals } as ScoredPR;
       })
       .filter((x): x is ScoredPR => x !== null)
@@ -213,32 +229,20 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
 
     if (clusterItems.length < 2) continue;
 
+    // Exact avg + min pairwise similarity over ALL pairs. Deterministic by
+    // construction: a sampled min is not the true min, and a sampled avg drifts
+    // per run, which would flip the high/solid/loose confidence tier when a
+    // maintainer re-runs. O(n^2) per cluster is fine — components are bounded by
+    // the centroid-refinement pass above.
     let totalSim = 0,
-      pairs = 0;
-    const MAX_PAIRS = 100;
-    const totalPossiblePairs = (component.length * (component.length - 1)) / 2;
-    if (totalPossiblePairs <= MAX_PAIRS) {
-      for (let i = 0; i < component.length; i++) {
-        for (let j = i + 1; j < component.length; j++) {
-          const embA = embeddings.get(component[i])!;
-          const embB = embeddings.get(component[j])!;
-          totalSim += cosineSimilarity(embA, embB);
-          pairs++;
-        }
-      }
-    } else {
-      // Random sample of pairs
-      const sampled = new Set<string>();
-      while (pairs < MAX_PAIRS) {
-        const i = Math.floor(Math.random() * component.length);
-        let j = Math.floor(Math.random() * (component.length - 1));
-        if (j >= i) j++;
-        const key = i < j ? `${i}:${j}` : `${j}:${i}`;
-        if (sampled.has(key)) continue;
-        sampled.add(key);
-        const embA = embeddings.get(component[i])!;
-        const embB = embeddings.get(component[j])!;
-        totalSim += cosineSimilarity(embA, embB);
+      pairs = 0,
+      minSim = 1;
+    for (let i = 0; i < component.length; i++) {
+      const embA = embeddings.get(component[i])!;
+      for (let j = i + 1; j < component.length; j++) {
+        const sim = cosineSimilarity(embA, embeddings.get(component[j])!);
+        totalSim += sim;
+        if (sim < minSim) minSim = sim;
         pairs++;
       }
     }
@@ -246,14 +250,33 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
     clusters.push({
       id: 0, // reassigned below
       items: clusterItems,
-      bestPick: clusterItems[0],
+      // Canonical via the shared selector (issue-majority -> earliest report,
+      // PR-majority -> highest score); clusterItems stays score-sorted for display.
+      bestPick: selectCanonical(clusterItems),
       avgSimilarity: pairs > 0 ? totalSim / pairs : 0,
+      minSimilarity: pairs > 0 ? minSim : 0,
       theme: clusterItems[0].title,
     });
   }
 
   // Sort by size descending, then assign sequential IDs
-  clusters.sort((a, b) => b.items.length - a.items.length);
+  // Deterministic order: size desc, then by the cluster's lexically-lowest
+  // (repo, number) so equal-size clusters always get the same ids regardless of
+  // discovery/iteration order.
+  const clusterRef = (c: Cluster) => {
+    let best = c.items[0];
+    for (const it of c.items) {
+      if (it.repo < best.repo || (it.repo === best.repo && it.number < best.number)) best = it;
+    }
+    return best;
+  };
+  clusters.sort((a, b) => {
+    if (b.items.length !== a.items.length) return b.items.length - a.items.length;
+    const ka = clusterRef(a);
+    const kb = clusterRef(b);
+    if (ka.repo !== kb.repo) return ka.repo < kb.repo ? -1 : 1;
+    return ka.number - kb.number;
+  });
   clusters.forEach((c, i) => {
     c.id = i + 1;
   });

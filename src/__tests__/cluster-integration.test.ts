@@ -160,6 +160,164 @@ describe("findDuplicateClusters", () => {
     store.close();
   });
 
+  it("clusters identical vectors — minSimilarity is defined and ~1", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    const emb = new Float32Array([1, 2, 3, 4]);
+    const items = [makePR(1, "Fix bug"), makePR(2, "Fix bug again"), makePR(3, "Fix bug also")];
+    for (const item of items) store.upsert(storeItem(item, emb));
+
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    expect(clusters[0].minSimilarity).toBeCloseTo(1.0);
+    expect(clusters[0].minSimilarity).toBeCloseTo(clusters[0].avgSimilarity);
+    store.close();
+  });
+
+  it("exposes chaining: minSimilarity < avgSimilarity when a cluster is single-linkage chained", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    // A(0deg) B(25deg) C(50deg): cos(A,B)=cos(B,C)=0.906 >= 0.85 link,
+    // but cos(A,C)=0.643 < 0.85. Single-linkage groups all three via B;
+    // minSimilarity must surface the weak A-C pair the avg hides.
+    const A = new Float32Array([1, 0, 0, 0]);
+    const B = new Float32Array([0.9063, 0.4226, 0, 0]);
+    const C = new Float32Array([0.6428, 0.766, 0, 0]);
+    const items = [makePR(1, "A"), makePR(2, "B"), makePR(3, "C")];
+    store.upsert(storeItem(items[0], A));
+    store.upsert(storeItem(items[1], B));
+    store.upsert(storeItem(items[2], C));
+
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    expect(clusters.length).toBe(1);
+    expect(clusters[0].items.length).toBe(3);
+    expect(clusters[0].minSimilarity).toBeLessThan(clusters[0].avgSimilarity);
+    expect(clusters[0].minSimilarity).toBeCloseTo(0.643, 2);
+    store.close();
+  });
+
+  it("det-exact-pairwise: avg/min similarity are deterministic across runs for a >100-pair cluster", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    // 16 members at 1-degree steps: every pairwise cos >= cos(15deg)=0.966, so they
+    // form one cluster; 16*15/2 = 120 pairs > the old MAX_PAIRS=100, which is exactly
+    // the branch that sampled pairs with Math.random() and drifted per run.
+    const items: PRItem[] = [];
+    for (let k = 0; k < 16; k++) {
+      const rad = (k * Math.PI) / 180;
+      const v = new Float32Array([Math.cos(rad), Math.sin(rad), 0, 0]);
+      const pr = makePR(k + 1, `item ${k}`);
+      items.push(pr);
+      store.upsert(storeItem(pr, v));
+    }
+
+    const run1 = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    const run2 = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    expect(run1.length).toBe(1);
+    expect(run1[0].items.length).toBe(16);
+    // Exact computation must give byte-identical avg/min on every run.
+    expect(run1[0].avgSimilarity).toBe(run2[0].avgSimilarity);
+    expect(run1[0].minSimilarity).toBe(run2[0].minSimilarity);
+    store.close();
+  });
+
+  it("det-stable-order: equal-size clusters get deterministic IDs by ascending item number", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    // Insert the higher-numbered cluster FIRST so discovery order alone would give
+    // it id 1. Two orthogonal size-2 clusters; the tie-break must order by number.
+    const embA = new Float32Array([1, 0, 0, 0]);
+    const embB = new Float32Array([0, 1, 0, 0]);
+    const items = [makePR(10, "hi-a"), makePR(11, "hi-b"), makePR(2, "lo-a"), makePR(3, "lo-b")];
+    store.upsert(storeItem(items[0], embA));
+    store.upsert(storeItem(items[1], embA));
+    store.upsert(storeItem(items[2], embB));
+    store.upsert(storeItem(items[3], embB));
+
+    const run1 = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    const run2 = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    expect(run1.length).toBe(2);
+    const byId = [...run1].sort((a, b) => a.id - b.id);
+    // cluster {2,3} (min number 2) must be id 1, before {10,11}.
+    expect(Math.min(...byId[0].items.map((i) => i.number))).toBe(2);
+    expect(Math.min(...byId[1].items.map((i) => i.number))).toBe(10);
+    // and stable across runs
+    expect(
+      run2.map(
+        (c) =>
+          c.id +
+          ":" +
+          c.items
+            .map((i) => i.number)
+            .sort()
+            .join(","),
+      ),
+    ).toEqual(
+      run1.map(
+        (c) =>
+          c.id +
+          ":" +
+          c.items
+            .map((i) => i.number)
+            .sort()
+            .join(","),
+      ),
+    );
+    store.close();
+  });
+
+  it("cluster score is time-independent: recency is a signal, not scored", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    const emb = new Float32Array([1, 1, 1, 1]);
+    // identical in every scored signal, differ only in updatedAt (recency).
+    const old = { ...makePR(1, "same"), updatedAt: "2020-01-01T00:00:00Z" };
+    const fresh = { ...makePR(2, "same"), updatedAt: "2026-07-01T00:00:00Z" };
+    store.upsert(storeItem(old, emb));
+    store.upsert(storeItem(fresh, emb));
+
+    const clusters = findDuplicateClusters(store, [old, fresh], { threshold: 0.85, repo: "test/repo" });
+    expect(clusters.length).toBe(1);
+    const scores = clusters[0].items.map((i) => i.score);
+    // recency was the only difference; if it were scored these would diverge.
+    expect(scores[0]).toBe(scores[1]);
+    store.close();
+  });
+
+  it("recall-centroid-keep: a centroid-ejected member still edge-linked to the core is kept, not dropped", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+
+    // chain A(0deg)-B(25)-C(50) plus D(-25) linked to A. The 4-member centroid
+    // sits at ~12.5deg and ejects the endpoints C and D (~37.5deg away, cos 0.79
+    // < 0.85). But C edges B and D edges A (cos 25 = 0.906 >= 0.85), so both are
+    // real members pulling the centroid, not chain outliers — none may be dropped.
+    const A = new Float32Array([1, 0, 0, 0]);
+    const B = new Float32Array([0.9063, 0.4226, 0, 0]);
+    const C = new Float32Array([0.6428, 0.766, 0, 0]);
+    const D = new Float32Array([0.9063, -0.4226, 0, 0]);
+    const items = [makePR(1, "A"), makePR(2, "B"), makePR(3, "C"), makePR(4, "D")];
+    store.upsert(storeItem(items[0], A));
+    store.upsert(storeItem(items[1], B));
+    store.upsert(storeItem(items[2], C));
+    store.upsert(storeItem(items[3], D));
+
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    expect(clusters.length).toBe(1);
+    expect(clusters[0].items.length).toBe(4);
+    store.close();
+  });
+
   it("single item — no cluster formed", () => {
     const path = tmpDb();
     dbs.push(path);

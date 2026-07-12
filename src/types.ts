@@ -1,5 +1,7 @@
 export interface PRItem {
   number: number;
+  /** GitHub GraphQL/REST node id; present when the scan fetched it. */
+  nodeId?: string;
   type: "pr" | "issue";
   repo: string;
   title: string;
@@ -31,7 +33,8 @@ export interface ScoreSignals {
   authorHistory: number;
   descriptionQuality: number;
   reviewApprovals: number;
-  recency: number;
+  /** Only set by the ranked scorer; the clustering scorer omits it. */
+  recency?: number;
 }
 
 export interface Cluster {
@@ -39,6 +42,13 @@ export interface Cluster {
   items: ScoredPR[];
   bestPick: ScoredPR;
   avgSimilarity: number;
+  /**
+   * Lowest pairwise similarity between any two members. Clustering is
+   * single-linkage, so a cluster can chain in members whose pairwise
+   * similarity is below the threshold; avgSimilarity hides this, minSimilarity
+   * exposes it. A large avg-min gap means the cluster is not internally tight.
+   */
+  minSimilarity: number;
   theme: string;
 }
 

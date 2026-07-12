@@ -8,6 +8,7 @@ import chalk from "chalk";
 import { Command } from "commander";
 import ora from "ora";
 import { runBenchmark } from "./benchmark.js";
+import { selectCanonical } from "./canonical.js";
 import { findDuplicateClusters } from "./cluster.js";
 import { getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
@@ -25,6 +26,7 @@ import {
 import { reviewPR } from "./reviewer.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
 import { cosineSimilarity } from "./similarity.js";
+import { buildStarmapPayload, confidenceTier } from "./starmap.js";
 import { VectorStore } from "./store.js";
 import type { PRItem } from "./types.js";
 import { checkVisionAlignment } from "./vision.js";
@@ -384,6 +386,10 @@ program
   .option("--dry-run", "Show what would be labeled without applying")
   .option("--json", "Output results as NDJSON")
   .option("--output <format>", "Output format: markdown")
+  .option(
+    "--starmap <path>",
+    "Also write a stable star-map JSON contract (clusters + confidence + join keys) to <path>",
+  )
   .action(async (opts) => {
     if (opts.json && opts.output) {
       console.error(chalk.red("Cannot use --json and --output together"));
@@ -431,22 +437,36 @@ program
           );
         }
       } else {
-        if (isMultiRepo) {
-          await runDupesMulti(ctx, repos, {
-            threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
-            applyLabels: opts.applyLabels,
-            dryRun: opts.dryRun,
-            json: opts.json,
-            output: opts.output,
+        const clusters = isMultiRepo
+          ? await runDupesMulti(ctx, repos, {
+              threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
+              applyLabels: opts.applyLabels,
+              dryRun: opts.dryRun,
+              json: opts.json,
+              output: opts.output,
+            })
+          : await runDupes(ctx, {
+              threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
+              applyLabels: opts.applyLabels,
+              dryRun: opts.dryRun,
+              json: opts.json,
+              output: opts.output,
+            });
+
+        if (opts.starmap) {
+          const threshold =
+            opts.threshold !== undefined ? parseFloat(opts.threshold) : ctx.config.thresholds.duplicate_similarity;
+          const payload = buildStarmapPayload(clusters, {
+            repo: isMultiRepo ? repos.join(", ") : ctx.repoFull,
+            threshold,
+            generatedAt: new Date().toISOString(),
+            embeddingModel: ctx.store.getMeta("embedding_model") ?? "unknown",
+            embeddingProvider: ctx.store.getMeta("embedding_provider") ?? "unknown",
+            embeddingDimensions: Number(ctx.store.getMeta("embedding_dimensions") ?? 0),
+            embeddingConfigHash: ctx.store.getMeta("embedding_config_hash") ?? "unknown",
           });
-        } else {
-          await runDupes(ctx, {
-            threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
-            applyLabels: opts.applyLabels,
-            dryRun: opts.dryRun,
-            json: opts.json,
-            output: opts.output,
-          });
+          writeFileSync(opts.starmap, `${JSON.stringify(payload, null, 2)}\n`);
+          console.log(chalk.green(`★ star-map JSON written to ${opts.starmap} (${payload.clusterCount} clusters)`));
         }
       }
     } finally {
@@ -1032,6 +1052,7 @@ program
             id: c.id,
             size: c.items.length,
             avgSimilarity: c.avgSimilarity,
+            minSimilarity: c.minSimilarity,
             bestPick: c.bestPick.number,
             theme: c.theme,
           })),
@@ -1072,33 +1093,18 @@ program
 
     report += `## duplicate clusters (top ${clusterN})\n\n`;
     report += `these PRs/issues are similar enough to likely be duplicates. the "source of truth" is the highest-quality canonical item in each group.\n\n`;
-    report += `| # | size | avg similarity | source of truth | theme |\n`;
-    report += `|---|------|---------------|-----------------|-------|\n`;
+    report += `**confidence** reflects the *minimum* pairwise similarity inside the cluster, not the average. clustering is single-linkage, so a cluster can chain in loosely-related items; a low min similarity means the members are not all mutually similar and the group should be eyeballed before closing anything. `;
+    report += `high = min ≥ 90%, solid = min ≥ 80%, loose = min < 80% (likely chained, split before acting).\n\n`;
+    report += `| # | size | avg similarity | min similarity | confidence | source of truth | theme |\n`;
+    report += `|---|------|---------------|----------------|-----------|-----------------|-------|\n`;
     for (const cluster of clusters.slice(0, clusterN)) {
       const theme = cluster.theme.replace(/\|/g, "\\|").slice(0, 60);
-      // Source of truth selection:
-      // - For issue-majority clusters: earliest open date first (canonical first report),
-      //   then description quality, then most discussion
-      // - For PR-majority clusters: highest quality score first, then earliest date
-      const issueCount = cluster.items.filter((i) => i.type === "issue").length;
-      const isIssueMajority = issueCount > cluster.items.length / 2;
-      const source = [...cluster.items].sort((a, b) => {
-        if (isIssueMajority) {
-          // earliest first, quality as tiebreaker
-          const aDate = new Date(a.createdAt).getTime();
-          const bDate = new Date(b.createdAt).getTime();
-          if (aDate !== bDate) return aDate - bDate;
-          return b.score - a.score;
-        }
-        // PR clusters: highest score first, earliest as tiebreaker
-        if (b.score !== a.score) return b.score - a.score;
-        const aDate = new Date(a.createdAt).getTime();
-        const bDate = new Date(b.createdAt).getTime();
-        if (aDate !== bDate) return aDate - bDate;
-        return (b.reviewCount || 0) - (a.reviewCount || 0);
-      })[0];
+      const minPct = cluster.minSimilarity * 100;
+      const tier = confidenceTier(cluster.minSimilarity);
+      const confidence = tier === "loose" ? "loose ⚠" : tier;
+      const source = selectCanonical(cluster.items);
       const linkType = source.type === "pr" ? "pull" : "issues";
-      report += `| ${cluster.id} | ${cluster.items.length} | ${(cluster.avgSimilarity * 100).toFixed(1)}% | [#${source.number}](https://github.com/${repoFull}/${linkType}/${source.number}) | ${theme} |\n`;
+      report += `| ${cluster.id} | ${cluster.items.length} | ${(cluster.avgSimilarity * 100).toFixed(1)}% | ${minPct.toFixed(1)}% | ${confidence} | [#${source.number}](https://github.com/${repoFull}/${linkType}/${source.number}) | ${theme} |\n`;
     }
     report += `\n`;
 
@@ -1107,22 +1113,7 @@ program
       report += `each cluster expanded with per-item similarity against the source of truth. close duplicates as "duplicate of #source".\n\n`;
 
       for (const cluster of clusters.slice(0, clusterN)) {
-        // Pick source of truth with same criteria as summary table
-        const issueCount2 = cluster.items.filter((i) => i.type === "issue").length;
-        const isIssueMajority2 = issueCount2 > cluster.items.length / 2;
-        const source = [...cluster.items].sort((a, b) => {
-          if (isIssueMajority2) {
-            const aDate = new Date(a.createdAt).getTime();
-            const bDate = new Date(b.createdAt).getTime();
-            if (aDate !== bDate) return aDate - bDate;
-            return b.score - a.score;
-          }
-          if (b.score !== a.score) return b.score - a.score;
-          const aDate = new Date(a.createdAt).getTime();
-          const bDate = new Date(b.createdAt).getTime();
-          if (aDate !== bDate) return aDate - bDate;
-          return (b.reviewCount || 0) - (a.reviewCount || 0);
-        })[0];
+        const source = selectCanonical(cluster.items);
 
         const sourceId = `${repoFull}:${source.type}:${source.number}`;
         const sourceEmb = store.getEmbedding(sourceId);

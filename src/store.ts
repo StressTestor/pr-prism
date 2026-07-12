@@ -271,6 +271,7 @@ export class VectorStore {
         ciStatus: metadata.ciStatus,
         reviewCount: metadata.reviewCount,
         hasTests: metadata.hasTests,
+        nodeId: metadata.nodeId,
         body: row.body_snippet,
       };
     });
@@ -284,7 +285,9 @@ export class VectorStore {
 
   getAllEmbeddings(repo: string): Map<string, Float32Array> {
     const rows = this.db
-      .prepare("SELECT v.id, v.embedding FROM vec_items v INNER JOIN items i ON v.id = i.id WHERE i.repo = ?")
+      .prepare(
+        "SELECT v.id, v.embedding FROM vec_items v INNER JOIN items i ON v.id = i.id WHERE i.repo = ? ORDER BY v.id",
+      )
       .all(repo) as any[];
     const map = new Map<string, Float32Array>();
     for (const row of rows) {
@@ -319,6 +322,7 @@ export class VectorStore {
         ciStatus: metadata.ciStatus,
         reviewCount: metadata.reviewCount,
         hasTests: metadata.hasTests,
+        nodeId: metadata.nodeId,
         body: row.body_snippet,
       } as StoreItem;
     });
@@ -329,7 +333,7 @@ export class VectorStore {
     const placeholders = repos.map(() => "?").join(",");
     const rows = this.db
       .prepare(
-        `SELECT v.id, v.embedding FROM vec_items v INNER JOIN items i ON v.id = i.id WHERE i.repo IN (${placeholders})`,
+        `SELECT v.id, v.embedding FROM vec_items v INNER JOIN items i ON v.id = i.id WHERE i.repo IN (${placeholders}) ORDER BY v.id`,
       )
       .all(...repos) as any[];
     const map = new Map<string, Float32Array>();

@@ -5,7 +5,7 @@ import Table from "cli-table3";
 import ora from "ora";
 import { findDuplicateClusters } from "./cluster.js";
 import { getRepos, getVisionDoc, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
-import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
+import { createEmbeddingProvider, embeddingConfigHash, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { applyLabelActions, ensureLabelsExist, type LabelAction } from "./labels.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
@@ -180,8 +180,9 @@ export async function runScan(
   // Embed and store
   const { embedder } = ctx;
 
-  // Store/update embedding metadata on every scan
-  const configHash = `${env.EMBEDDING_PROVIDER}:${env.EMBEDDING_MODEL}:${embedder.dimensions}`;
+  // Store/update embedding metadata on every scan. The hash includes the
+  // embed-text format version, so changing prepareEmbeddingText trips the warning.
+  const configHash = embeddingConfigHash(env.EMBEDDING_PROVIDER, env.EMBEDDING_MODEL, embedder.dimensions);
   const storedHash = store.getMeta("embedding_config_hash");
   if (storedHash && storedHash !== configHash && newItems.length > 0) {
     console.log(
@@ -269,6 +270,7 @@ export async function runScan(
           reviewCount: item.reviewCount,
           hasTests: item.hasTests,
           bodyLength: item.body.length,
+          nodeId: item.nodeId,
         },
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
@@ -334,6 +336,7 @@ export async function runDupes(
           id: c.id,
           size: c.items.length,
           avgSimilarity: c.avgSimilarity,
+          minSimilarity: c.minSimilarity,
           bestPick: c.bestPick.number,
           theme: c.theme,
           items: c.items.map((i) => ({ number: i.number, type: i.type, title: i.title, score: i.score })),
@@ -345,11 +348,11 @@ export async function runDupes(
 
   if (opts.output === "markdown") {
     let md = `## duplicate clusters\n\n`;
-    md += `| # | Size | Avg Sim | Best Pick | Theme |\n`;
-    md += `|---|------|---------|-----------|-------|\n`;
+    md += `| # | Size | Avg Sim | Min Sim | Best Pick | Theme |\n`;
+    md += `|---|------|---------|---------|-----------|-------|\n`;
     for (const c of clusters) {
       const theme = c.theme.replace(/\|/g, "\\|").slice(0, 60);
-      md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | #${c.bestPick.number} | ${theme} |\n`;
+      md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | ${(c.minSimilarity * 100).toFixed(1)}% | #${c.bestPick.number} | ${theme} |\n`;
     }
     md += `\nTotal: ${clusters.reduce((s, c) => s + c.items.length, 0)} items across ${clusters.length} clusters\n`;
     console.log(md);
@@ -357,8 +360,8 @@ export async function runDupes(
   }
 
   const table = new Table({
-    head: ["#", "Size", "Avg Sim", "Best Pick", "Theme"],
-    colWidths: [6, 6, 10, 12, 50],
+    head: ["#", "Size", "Avg Sim", "Min Sim", "Best Pick", "Theme"],
+    colWidths: [6, 6, 10, 10, 12, 44],
   });
 
   for (const cluster of clusters) {
@@ -366,8 +369,9 @@ export async function runDupes(
       cluster.id,
       cluster.items.length,
       `${(cluster.avgSimilarity * 100).toFixed(1)}%`,
+      `${(cluster.minSimilarity * 100).toFixed(1)}%`,
       `#${cluster.bestPick.number}`,
-      cluster.theme.slice(0, 48),
+      cluster.theme.slice(0, 42),
     ]);
   }
 
@@ -440,6 +444,7 @@ export async function runDupesMulti(
           id: c.id,
           size: c.items.length,
           avgSimilarity: c.avgSimilarity,
+          minSimilarity: c.minSimilarity,
           bestPick: { number: c.bestPick.number, repo: c.bestPick.repo },
           theme: c.theme,
           crossRepo: new Set(c.items.map((i) => i.repo)).size > 1,
@@ -452,12 +457,12 @@ export async function runDupesMulti(
 
   if (opts.output === "markdown") {
     let md = `## duplicate clusters (${repos.length} repos)\n\n`;
-    md += `| # | Size | Avg Sim | Best Pick | Theme |\n`;
-    md += `|---|------|---------|-----------|-------|\n`;
+    md += `| # | Size | Avg Sim | Min Sim | Best Pick | Theme |\n`;
+    md += `|---|------|---------|---------|-----------|-------|\n`;
     for (const c of clusters) {
       const theme = c.theme.replace(/\|/g, "\\|").slice(0, 60);
       const bestLabel = `[${c.bestPick.repo}] #${c.bestPick.number}`;
-      md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | ${bestLabel} | ${theme} |\n`;
+      md += `| ${c.id} | ${c.items.length} | ${(c.avgSimilarity * 100).toFixed(1)}% | ${(c.minSimilarity * 100).toFixed(1)}% | ${bestLabel} | ${theme} |\n`;
     }
     md += `\nTotal: ${clusters.reduce((s, c) => s + c.items.length, 0)} items across ${clusters.length} clusters\n`;
     if (crossRepoClusters.length > 0) {
@@ -468,8 +473,8 @@ export async function runDupesMulti(
   }
 
   const table = new Table({
-    head: ["#", "Size", "Avg Sim", "Best Pick", "Theme"],
-    colWidths: [6, 6, 10, 30, 40],
+    head: ["#", "Size", "Avg Sim", "Min Sim", "Best Pick", "Theme"],
+    colWidths: [6, 6, 10, 10, 28, 36],
   });
 
   for (const cluster of clusters) {
@@ -478,8 +483,9 @@ export async function runDupesMulti(
       cluster.id,
       cluster.items.length,
       `${(cluster.avgSimilarity * 100).toFixed(1)}%`,
+      `${(cluster.minSimilarity * 100).toFixed(1)}%`,
       bestLabel,
-      cluster.theme.slice(0, 38),
+      cluster.theme.slice(0, 34),
     ]);
   }
 
@@ -588,7 +594,7 @@ export async function runRank(ctx: PipelineContext, opts: { top?: number; explai
         (s.authorHistory * weights.author_history).toFixed(2),
         (s.descriptionQuality * weights.description_quality).toFixed(2),
         (s.reviewApprovals * weights.review_approvals).toFixed(2),
-        (s.recency * 0.05).toFixed(2),
+        ((s.recency ?? 0) * 0.05).toFixed(2),
         pr.score.toFixed(2),
       ]);
     }
