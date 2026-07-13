@@ -2,6 +2,11 @@
 
 all notable changes to pr-prism are documented here.
 
+## [3.0.1] — 2026-07-13
+
+### fixed
+- better-sqlite3 bumped 12.6.2 -> 12.11.1: node 26 dropped `info.This()` from V8 property callbacks, so 12.6.2 fails to compile from source. that broke the brew formula (builds against brew's node, now 26) and any npm install on node 26. 12.11.1 supports node through 26.x. suite verified green on node 26.5.0
+
 ## [3.0.0] — 2026-07-13
 
 ### breaking
