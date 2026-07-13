@@ -98,7 +98,7 @@ npm run server       # start webhook server
 ## release
 
 - tag push `v*` triggers `.github/workflows/release.yml`: verify tag == package version → `npm ci` → `npm run ci` → `npm publish --provenance` → GitHub Release with generated notes
-- npm auth: `NPM_TOKEN` repo secret (granular token scoped to prism-triage). **expires ~2026-10-07 — rotate before then or publishes fail on auth**
+- npm auth: `NPM_TOKEN` repo secret (granular token scoped to prism-triage). **expires ~2026-10-07. rotate before then or publishes fail on auth**
 - workflow is tag-push only (not fork-reachable); all actions pinned to commit SHAs
 - the npm package excludes compiled tests (`tsconfig.build.json`); `npm run build` cleans `dist/` first so stale artifacts can't leak into a publish (the 2.0.1 orphan-file gotcha)
 - brew tap bump is manual: update `Formula/prism-triage.rb` (tarball url + sha256) in StressTestor/homebrew-tap after the GitHub Release exists

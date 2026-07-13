@@ -31,11 +31,22 @@ jobs:
 
       - run: npm run ci
 
-      - run: npm publish --provenance --access public
+      # --ignore-scripts skips prepublishOnly (build+test already ran above).
+      # skip-if-published makes a rerun after a downstream failure safe.
+      - name: Publish to npm
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if npm view "prism-triage@$version" version >/dev/null 2>&1; then
+            echo "prism-triage@$version already on npm, skipping publish"
+          else
+            npm publish --ignore-scripts --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: GitHub Release
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}
