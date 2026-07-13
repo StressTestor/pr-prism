@@ -3,7 +3,7 @@
 [![CI](https://github.com/StressTestor/pr-prism/actions/workflows/ci.yml/badge.svg)](https://github.com/StressTestor/pr-prism/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/prism-triage)](https://www.npmjs.com/package/prism-triage)
 [![license](https://img.shields.io/github/license/StressTestor/pr-prism)](LICENSE)
-[![node](https://img.shields.io/node/v/pr-prism)](package.json)
+[![node](https://img.shields.io/node/v/prism-triage)](package.json)
 
 triage tool for repos drowning in PRs. finds dupes, ranks quality, checks vision alignment across repos.
 
@@ -73,6 +73,9 @@ prism scan --state all              # open + closed items
 prism scan --since 7d               # only items updated in last 7 days
 prism dupes --threshold 0.9         # stricter similarity
 prism dupes --cluster 3             # inspect specific cluster
+prism dupes --starmap map.json      # stable JSON contract for visualizers
+prism dupes --housekeeping todo.md  # editable close-checklist manifest
+prism init -r owner/repo -y         # non-interactive init, repo from flag
 prism rank --top 50 --explain       # top 50 with signal breakdown
 prism vision --stats                # histogram + section breakdown
 prism vision --detail               # per-item alignment table
@@ -155,6 +158,22 @@ gate that defaults to dry-run. the CLI writes only under `--apply-labels`. the
 webhook server writes only when `PRISM_APPLY=1` is set - without it a deployed bot
 logs what it *would* do instead of touching the repo. `--dry-run` always wins.
 
+## housekeeping
+
+`prism dupes --housekeeping todo.md` writes an editable markdown checklist: per
+cluster, the tracker issue (the original bug report), role-tagged fix/duplicate
+candidates, and paste-ready close text. loose clusters get flagged for review
+instead of a close directive. confirmed exact-dupes lead the checklist.
+
+it's a checklist you edit and act on. prism never closes anything itself.
+
+## star map export
+
+`prism dupes --starmap map.json` emits a stable JSON contract for external
+visualizers (schema v1, additive-only evolution): clusters with confidence tiers,
+contested + runner-up, tracker, item state (open/closed/merged), embedding
+metadata, and github node ids as a join key.
+
 ## github action
 
 run pr-prism automatically on every PR:
@@ -227,6 +246,10 @@ run pr-prism as a GitHub App that auto-triages every new issue and PR in real ti
 ## how dupe detection works
 
 embeds every PR/issue title+body into a vector, stores in sqlite-vec, computes cosine similarity across all pairs. anything above 0.85 gets clustered. each cluster picks a "best" based on quality score (tests, CI, diff size, reviews, recency, description quality). rest get flagged as dupes.
+
+every cluster reports a confidence tier off its minimum pairwise similarity (high >= 90%, solid >= 80%, loose < 80%), so a chained-together loose cluster gets eyeballed before anything is closed. near-tied best picks get a contested flag with the runner-up named. issue-majority clusters resolve to the earliest report (the original bug), PR-majority to the highest quality item, and merged PRs beat open ones.
+
+above the embedding clusters sits a confirmed tier: PRs with the same head commit or an identical patch (git patch-id) are exact duplicates, grouped deterministically with no similarity threshold involved.
 
 for repos with 5000+ items, automatically switches from brute-force to ANN pre-filtering via sqlite-vec, then verifies with exact cosine similarity.
 

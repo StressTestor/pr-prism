@@ -1,0 +1,52 @@
+name: Release
+
+# publishes to npm + creates the GitHub Release on tag push.
+# tag-push only: not fork-reachable, so NPM_TOKEN is never exposed to fork code.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # npm --provenance attestation
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify tag matches package version
+        run: |
+          pkg="v$(node -p "require('./package.json').version")"
+          [ "$pkg" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != package version $pkg"; exit 1; }
+
+      - run: npm ci
+
+      - run: npm run ci
+
+      # --ignore-scripts skips prepublishOnly (build+test already ran above).
+      # skip-if-published makes a rerun after a downstream failure safe.
+      - name: Publish to npm
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if npm view "prism-triage@$version" version >/dev/null 2>&1; then
+            echo "prism-triage@$version already on npm, skipping publish"
+          else
+            npm publish --ignore-scripts --provenance --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: GitHub Release
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}

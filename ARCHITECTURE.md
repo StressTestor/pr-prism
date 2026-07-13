@@ -48,7 +48,7 @@ src/                    # CLI tool (published to npm as prism-triage)
   errors.ts             # typed error classes
   types.ts              # shared interfaces
   index.ts              # public API barrel export
-  __tests__/            # 15 test files, 199 tests
+  __tests__/            # 23 test files (309 tests total incl. server)
 
 server/                 # webhook server (GitHub App)
   index.ts              # Hono server entry point
@@ -60,7 +60,7 @@ server/                 # webhook server (GitHub App)
   config.ts             # server-specific config
   db.ts                 # server database helpers
   format.ts             # output formatting
-  __tests__/            # 7 test files
+  __tests__/            # 8 test files
 ```
 
 ## key patterns
@@ -87,11 +87,20 @@ single SQLite database per project, managed by `store.ts`.
 
 ```bash
 npm run dev          # run CLI via tsx
-npm run build        # tsc compile
+npm run build        # clean dist/ + tsc via tsconfig.build.json (excludes __tests__)
+npm run typecheck    # tsc --noEmit on src (incl. tests) + server
 npm test             # vitest run
 npm run lint         # biome check
-npm run ci           # lint + typecheck + test
+npm run ci           # build + lint + typecheck + test + CLI smoke
 npm run server       # start webhook server
 ```
 
-last updated: 2026-07-12
+## release
+
+- tag push `v*` triggers `.github/workflows/release.yml`: verify tag == package version → `npm ci` → `npm run ci` → `npm publish --provenance` → GitHub Release with generated notes
+- npm auth: `NPM_TOKEN` repo secret (granular token scoped to prism-triage). **expires ~2026-10-07. rotate before then or publishes fail on auth**
+- workflow is tag-push only (not fork-reachable); all actions pinned to commit SHAs
+- the npm package excludes compiled tests (`tsconfig.build.json`); `npm run build` cleans `dist/` first so stale artifacts can't leak into a publish (the 2.0.1 orphan-file gotcha)
+- brew tap bump is manual: update `Formula/prism-triage.rb` (tarball url + sha256) in StressTestor/homebrew-tap after the GitHub Release exists
+
+last updated: 2026-07-13

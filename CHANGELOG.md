@@ -2,6 +2,30 @@
 
 all notable changes to pr-prism are documented here.
 
+## [3.0.0] — 2026-07-13
+
+### breaking
+- every github write (labels, comments, closes, issue creation) now funnels through one gate that defaults to dry-run. the CLI writes only under `--apply-labels`; the webhook server writes only when `PRISM_APPLY=1` is set. previously the server wrote unconditionally, and `--dry-run` still created missing labels. if you run the bot and want it to keep writing, set `PRISM_APPLY=1`
+
+### added
+- `prism dupes --starmap <path>`: stable JSON contract for external visualizers (schema v1, additive-only evolution). clusters carry confidence tiers, contested + runnerUp, tracker (original bug + role-tagged fix/duplicate candidates), item state (open/closed/merged), embedding model/dims/config hash, and github node ids
+- confirmed-duplicate tier: PRs with the same head commit or an identical patch (git patch-id) group deterministically, above the embedding clusters. no similarity threshold involved
+- `prism dupes --housekeeping <path>`: editable markdown manifest with the tracker issue, role-tagged candidates, paste-ready close text, and loose clusters flagged for review instead of a close directive. no auto-writes
+- confidence tier on every cluster (high >= 90% / solid >= 80% / loose < 80%), keyed on minimum pairwise similarity, computed exactly (no sampling)
+- contested flag: near-tied clusters (top-2 scores within 0.05) mark bestPick as needs-human and name the runnerUp
+- `prism init` detects the repo from the git remote and writes it into config (`-r/--repo` override, `-y/--yes` non-interactive, `--no-verify`)
+
+### changed
+- one canonical selection everywhere: report, starmap, and the live bot use the same rule. issue-majority clusters resolve to the earliest report (the original bug), PR-majority to the highest quality item, and merged PRs are preferred over open ones
+- fully deterministic output: same db in, same clusters, canonicals, and ordering out, run to run
+- embedding text drops the "Pull Request:"/"Issue:" prefix so an issue and its fix PR embed identically (better recall). full re-embed (`prism reset` + `prism scan`) recommended; incremental scans warn on the text-version change
+- centroid refinement no longer ejects a real duplicate that only pulled the centroid off-center
+- npm package no longer ships compiled test files; build cleans `dist/` first so stale artifacts can't leak into a publish
+
+### security
+- every emitted title/theme is sanitized: control chars stripped, markdown table cells escaped. a hostile PR title can't inject table rows or terminal escapes
+- CI and release workflow actions pinned to commit SHAs; releases publish with npm provenance
+
 ## [2.0.1] — 2026-07-09
 
 ### changed
