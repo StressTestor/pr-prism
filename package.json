@@ -1,8 +1,14 @@
 {
   "name": "prism-triage",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "description": "BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/StressTestor/pr-prism.git"
+  },
+  "homepage": "https://github.com/StressTestor/pr-prism#readme",
+  "bugs": "https://github.com/StressTestor/pr-prism/issues",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -13,15 +19,17 @@
     "prism": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
     "build:action": "tsc -p action/tsconfig.json && mv action/dist/index.js action/dist/comment.js",
+    "typecheck": "tsc --noEmit && tsc -p server/tsconfig.json --noEmit",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check src/",
     "format": "biome format src/ --write",
-    "ci": "npm run build && npm run lint && npm test && node dist/cli.js --version && node dist/cli.js --help",
+    "ci": "npm run build && npm run lint && npm run typecheck && npm test && node dist/cli.js --version && node dist/cli.js --help",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build && npm run test"
   },
