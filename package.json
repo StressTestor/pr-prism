@@ -1,6 +1,6 @@
 {
   "name": "prism-triage",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "BYOK GitHub PR/Issue triage tool — de-duplicate, rank, and vision-check PRs at scale",
   "type": "module",
   "repository": {
@@ -62,7 +62,7 @@
     "@hono/node-server": "^1.19.11",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^12.11.1",
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.3",
@@ -82,5 +82,8 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^3.0.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true
   }
 }

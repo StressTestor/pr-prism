@@ -11,7 +11,7 @@ pr-prism is a triage tool for repos drowning in PRs. CLI scans GitHub, embeds it
 | language | TypeScript | 5.x |
 | runtime | Node.js | 22+ |
 | CLI framework | Commander.js | 13.x |
-| database | better-sqlite3 + sqlite-vec | 11.x / 0.1.x |
+| database | better-sqlite3 + sqlite-vec | 12.x / 0.1.x |
 | embeddings | ollama, jina, openai, voyage, kimi | multi-provider |
 | LLM | openai, anthropic, kimi, opencode, ollama | multi-provider |
 | HTTP server | Hono | 4.x |
