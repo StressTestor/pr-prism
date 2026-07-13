@@ -163,9 +163,9 @@ logs what it *would* do instead of touching the repo. `--dry-run` always wins.
 `prism dupes --housekeeping todo.md` writes an editable markdown checklist: per
 cluster, the tracker issue (the original bug report), role-tagged fix/duplicate
 candidates, and paste-ready close text. loose clusters get flagged for review
-instead of a close directive. confirmed exact-dupes lead the file.
+instead of a close directive. confirmed exact-dupes lead the checklist.
 
-it's a document you edit and act on. prism never closes anything itself.
+it's a checklist you edit and act on. prism never closes anything itself.
 
 ## star map export
 
