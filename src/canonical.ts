@@ -7,8 +7,11 @@
 // Semantics (the cli.ts rule, now shared):
 //   - issue-majority cluster  -> the earliest report is canonical (the original
 //     bug), quality score then item number as tiebreaks.
-//   - PR-majority cluster      -> the highest-quality item is canonical, then
-//     earliest, then most-reviewed, then item number.
+//   - PR-majority cluster      -> ranked in order: lifecycle state (merged >
+//     open > closed), then a CI veto (a known-red build never outranks a
+//     same-state non-failing sibling), then quality score, then earliest, then
+//     most-reviewed, then item number. state and the CI veto both sit BEFORE
+//     score so neither a stale open PR nor a failing one wins on score alone.
 // `mode` lets a caller pin the rule instead of deriving it from the set — the
 // triage bot passes the incoming item's type so its behavior is unchanged.
 
