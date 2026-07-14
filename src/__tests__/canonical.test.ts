@@ -220,6 +220,82 @@ describe("selectCanonical state preference (merged PRs are the source of truth)"
   });
 });
 
+describe("selectCanonical CI veto (a red build never becomes bestPick over a green sibling)", () => {
+  it("the odysseus #5207 case: a failing higher-scored PR loses to a passing lower-scored sibling", () => {
+    // Both open at scan time. #5358 scored higher (a test file it added inflated
+    // its quality score) but its CI is red; #5208 is the minimal green fix that
+    // was actually merged. Without the veto, score picks #5358 (the wrong one).
+    const items = [
+      c({ number: 5358, type: "pr", state: "open", score: 0.752, ciStatus: "failure" }),
+      c({ number: 5208, type: "pr", state: "open", score: 0.532, ciStatus: "success" }),
+    ];
+    expect(selectCanonical(items).number).toBe(5208);
+  });
+
+  it("a red build loses to a green sibling no matter how large its score lead", () => {
+    const items = [
+      c({ number: 1, type: "pr", state: "open", score: 0.99, ciStatus: "failure" }),
+      c({ number: 2, type: "pr", state: "open", score: 0.01, ciStatus: "success" }),
+    ];
+    expect(selectCanonical(items).number).toBe(2);
+  });
+
+  it("only failure demotes: pending/unknown/absent CI are never penalized, score still decides", () => {
+    const pending = [
+      c({ number: 1, type: "pr", state: "open", score: 0.9, ciStatus: "pending" }),
+      c({ number: 2, type: "pr", state: "open", score: 0.5, ciStatus: "success" }),
+    ];
+    expect(selectCanonical(pending).number).toBe(1); // pending not demoted -> higher score wins
+    const unknownVsAbsent = [
+      c({ number: 3, type: "pr", state: "open", score: 0.9, ciStatus: "unknown" }),
+      c({ number: 4, type: "pr", state: "open", score: 0.5 }),
+    ];
+    expect(selectCanonical(unknownVsAbsent).number).toBe(3); // neither demoted -> higher score wins
+  });
+
+  it("when every sibling is failing, the CI gate ties and score decides (no bottomless demotion)", () => {
+    const items = [
+      c({ number: 1, type: "pr", state: "open", score: 0.4, ciStatus: "failure" }),
+      c({ number: 2, type: "pr", state: "open", score: 0.9, ciStatus: "failure" }),
+    ];
+    expect(selectCanonical(items).number).toBe(2); // both red -> highest score
+  });
+
+  it("state still dominates CI: a merged PR wins even if its build is red", () => {
+    const items = [
+      c({ number: 1, type: "pr", state: "open", score: 0.9, ciStatus: "success" }),
+      c({ number: 2, type: "pr", state: "merged", score: 0.4, ciStatus: "failure" }),
+    ];
+    expect(selectCanonical(items).number).toBe(2); // merged is in main = source of truth
+  });
+
+  it("the CI gate applies within a state: a green closed PR beats a red closed PR", () => {
+    const items = [
+      c({ number: 1, type: "pr", state: "closed", score: 0.9, ciStatus: "failure" }),
+      c({ number: 2, type: "pr", state: "closed", score: 0.4, ciStatus: "success" }),
+    ];
+    expect(selectCanonical(items).number).toBe(2);
+  });
+
+  it("a pick decided by the CI gate is NOT contested, even when scores are within the tie margin", () => {
+    const items = [
+      c({ number: 1, type: "pr", state: "open", score: 0.52, ciStatus: "failure" }),
+      c({ number: 2, type: "pr", state: "open", score: 0.5, ciStatus: "success" }),
+    ];
+    const d = decideCanonical(items);
+    expect(d.canonical.number).toBe(2); // green wins despite lower score
+    expect(d.contested).toBe(false); // CI decided it, not a coin flip
+  });
+
+  it("issue-majority clusters ignore CI (earliest report stays canonical)", () => {
+    const items = [
+      c({ number: 1, type: "issue", createdAt: "2026-01-01T00:00:00Z", score: 0.1, ciStatus: "failure" }),
+      c({ number: 2, type: "issue", createdAt: "2026-02-01T00:00:00Z", score: 0.9, ciStatus: "success" }),
+    ];
+    expect(selectCanonical(items).number).toBe(1); // earliest report, CI is a PR-mode concept
+  });
+});
+
 describe("selectTracker (tracker substrate: original bug + role-tagged candidates)", () => {
   it("mixed cluster: tracker = earliest issue, PRs are fixes, later issue is a duplicate", () => {
     const items = [

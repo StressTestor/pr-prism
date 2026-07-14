@@ -7,8 +7,11 @@
 // Semantics (the cli.ts rule, now shared):
 //   - issue-majority cluster  -> the earliest report is canonical (the original
 //     bug), quality score then item number as tiebreaks.
-//   - PR-majority cluster      -> the highest-quality item is canonical, then
-//     earliest, then most-reviewed, then item number.
+//   - PR-majority cluster      -> ranked in order: lifecycle state (merged >
+//     open > closed), then a CI veto (a known-red build never outranks a
+//     same-state non-failing sibling), then quality score, then earliest, then
+//     most-reviewed, then item number. state and the CI veto both sit BEFORE
+//     score so neither a stale open PR nor a failing one wins on score alone.
 // `mode` lets a caller pin the rule instead of deriving it from the set — the
 // triage bot passes the incoming item's type so its behavior is unchanged.
 
@@ -23,6 +26,8 @@ export interface CanonicalCandidate {
   number: number;
   /** "open" | "closed" | "merged"; absent for callers with no state (triage). */
   state?: string;
+  /** CI rollup; absent for callers with no CI signal (triage). Only "failure" demotes. */
+  ciStatus?: "success" | "failure" | "pending" | "unknown";
 }
 
 function createdMs(item: CanonicalCandidate): number {
@@ -63,11 +68,25 @@ function statePriority(state: string | undefined): number {
   }
 }
 
+/**
+ * Rank a PR by CI outcome: only a KNOWN-red build demotes. A failing PR must not
+ * become bestPick over a same-state green sibling however high its quality score
+ * (the score rewards e.g. having a test file, blind to whether that test passes).
+ * success / pending / unknown / absent all rank equal (1) so a PR whose checks
+ * simply have not reported yet is never penalized, and an all-failing set ties
+ * here and falls through to score unchanged.
+ */
+function ciRank(status: string | undefined): number {
+  return status === "failure" ? 0 : 1;
+}
+
 function isNearTie<T extends CanonicalCandidate>(mode: "issue" | "pr", canonical: T, runnerUp: T): boolean {
   if (mode === "pr") {
     // A different lifecycle state decided the pick (e.g. merged over open) -> a
     // clear winner, not a coin flip. Only a same-state pair is a score near-tie.
     if (statePriority(canonical.state) !== statePriority(runnerUp.state)) return false;
+    // A green build chosen over a red sibling is a decisive reason, not a coin flip.
+    if (ciRank(canonical.ciStatus) !== ciRank(runnerUp.ciStatus)) return false;
     return canonical.score - runnerUp.score < TIE_MARGIN;
   }
   // The pick is on createdAt, so nearness is a time window (a huge score gap
@@ -109,6 +128,10 @@ export function decideCanonical<T extends CanonicalCandidate>(
       // BEFORE score - a merged fix often does not have the top computed score.
       const sp = statePriority(b.state) - statePriority(a.state);
       if (sp !== 0) return sp;
+      // Then veto a known-red build: a same-state green sibling always outranks it,
+      // BEFORE score, so a high quality score cannot promote a failing PR.
+      const cr = ciRank(b.ciStatus) - ciRank(a.ciStatus);
+      if (cr !== 0) return cr;
       if (b.score !== a.score) return b.score - a.score; // then highest score first
       const d = createdMs(a) - createdMs(b);
       if (d !== 0) return d;
