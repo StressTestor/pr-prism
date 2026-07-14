@@ -2,6 +2,11 @@
 
 all notable changes to pr-prism are documented here.
 
+## [unreleased]
+
+### changed
+- canonical/bestPick selection now vetoes a red build: a PR with failing CI never outranks a same-state sibling with a non-failing build, regardless of quality score. stops a high-scored PR (e.g. one that added a test file) from being named bestPick over the green fix that actually landed, when the added test fails. only `ciStatus === "failure"` demotes, so a PR whose checks have not reported yet is never penalized; state (merged > open > closed) still dominates. starmap `canonical`/`contested` for such clusters shift accordingly (schema unchanged, still v1)
+
 ## [3.0.1] — 2026-07-13
 
 ### fixed
