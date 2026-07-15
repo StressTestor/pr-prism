@@ -36,7 +36,7 @@ src/                    # CLI tool (published to npm as prism-triage)
   identity.ts           # findConfirmedDuplicates(): deterministic non-embedding dupe tier (same head-oid / patch-id)
   similarity.ts         # ANN pre-filtering, matryoshka truncation
   sanitize.ts           # title/theme emit sanitizer: strip control/ANSI, escape markdown table cells (row-injection defense)
-  scorer.ts             # 7 quality signals: tests, CI, diff size, author history, etc.
+  scorer.ts             # 7 quality signals: tests, CI, diff size, author history, etc. hasTests credit is gated on CI (a red build earns no test credit - failing tests are not coverage)
   starmap.ts            # stable star-map JSON contract: clusters + minSim/confidence/partition/contested+runnerUp + tracker(original bug + fix/duplicate candidates) + item state (open/closed/merged) + embeddingModel/provider/dims/configHash + node ids + (repo,number) join key
   housekeeping.ts       # editable markdown manifest: tracker + paste-ready close checklist + loose-as-buckets (no auto-writes)
   vision.ts             # chunked vision doc embedding, alignment scoring

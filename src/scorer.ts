@@ -79,7 +79,12 @@ export function scorePR(item: PRItem, config: PrismConfig, context: ScorerContex
   const hasDiffStats = item.additions != null && item.deletions != null;
 
   const signals: ScoreSignals = {
-    hasTests: item.hasTests === true ? 1.0 : item.hasTests === false ? 0.0 : 0.5,
+    // A test file only counts as coverage if it actually passes. A red build means
+    // the tests it added are failing, so it earns no more test credit than a PR
+    // with no tests at all (this is what let #5358's failing test inflate its
+    // score). Only a KNOWN-red build removes the credit; success/pending/unknown/
+    // absent keep it, so a not-yet-reported PR is never penalized.
+    hasTests: item.hasTests === true ? (item.ciStatus === "failure" ? 0.0 : 1.0) : item.hasTests === false ? 0.0 : 0.5,
     ciPassing: item.ciStatus === "success" ? 1 : item.ciStatus === "failure" ? 0 : 0.5,
     diffSize: hasDiffStats ? normalizeDiffSize(item.additions!, item.deletions!) : -1,
     authorHistory: normalizeAuthorHistory(authorMerges),
