@@ -70,6 +70,30 @@ describe("scorePR", () => {
     expect(withTests.score).toBeGreaterThan(noTests.score);
   });
 
+  it("a failing build earns no hasTests credit (failing tests are not working coverage)", () => {
+    const failing = scorePR(makePR({ hasTests: true, ciStatus: "failure" }), config, context);
+    expect(failing.signals.hasTests).toBe(0);
+  });
+
+  it("a non-failing build keeps full hasTests credit (success/pending/unknown not penalized)", () => {
+    expect(scorePR(makePR({ hasTests: true, ciStatus: "success" }), config, context).signals.hasTests).toBe(1);
+    expect(scorePR(makePR({ hasTests: true, ciStatus: "pending" }), config, context).signals.hasTests).toBe(1);
+    expect(scorePR(makePR({ hasTests: true, ciStatus: "unknown" }), config, context).signals.hasTests).toBe(1);
+    expect(scorePR(makePR({ hasTests: true }), config, context).signals.hasTests).toBe(1); // ciStatus absent
+  });
+
+  it("a red PR with a test file scores no higher than a red PR with no tests", () => {
+    // the #5358 pathology: adding a failing test file must not inflate the score
+    const failingWithTests = scorePR(makePR({ hasTests: true, ciStatus: "failure" }), config, context);
+    const failingNoTests = scorePR(makePR({ hasTests: false, ciStatus: "failure" }), config, context);
+    expect(failingWithTests.score).toBeCloseTo(failingNoTests.score, 10);
+  });
+
+  it("does not touch the unknown-tests neutral: hasTests absent stays 0.5 even with a red build", () => {
+    const unknownFailing = scorePR(makePR({ ciStatus: "failure" }), config, context); // hasTests undefined
+    expect(unknownFailing.signals.hasTests).toBe(0.5);
+  });
+
   it("scores smaller diffs higher", () => {
     const small = scorePR(makePR({ additions: 10, deletions: 5 }), config, context);
     const large = scorePR(makePR({ additions: 5000, deletions: 5000 }), config, context);

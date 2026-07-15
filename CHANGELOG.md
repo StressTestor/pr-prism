@@ -2,10 +2,13 @@
 
 all notable changes to pr-prism are documented here.
 
-## [unreleased]
+## [3.0.2] — 2026-07-15
+
+calibration pass driven by dogfooding a real duplicate cluster (odysseus #5207: bestPick was the closed, CI-failing PR over the merged green fix). two independent fixes so a red build can no longer win.
 
 ### changed
 - canonical/bestPick selection now vetoes a red build: a PR with failing CI never outranks a same-state sibling with a non-failing build, regardless of quality score. stops a high-scored PR (e.g. one that added a test file) from being named bestPick over the green fix that actually landed, when the added test fails. only `ciStatus === "failure"` demotes, so a PR whose checks have not reported yet is never penalized; state (merged > open > closed) still dominates. starmap `canonical`/`contested` for such clusters shift accordingly (schema unchanged, still v1)
+- the `hasTests` quality signal now requires a passing build: a PR with a failing build earns no test credit, since its added tests are not passing. this stops a scope-creep PR from inflating its rank by adding a test that fails. only a known-red build removes the credit (success/pending/unknown/absent keep it); the unknown-tests neutral is untouched. the merged-PR-is-canonical preference (state priority) already shipped in 3.0.0
 
 ## [3.0.1] — 2026-07-13
 
