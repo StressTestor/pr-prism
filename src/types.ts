@@ -21,6 +21,9 @@ export interface PRItem {
   hasTests?: boolean;
   /** PR head commit OID; two PRs on the same OID are a confirmed (non-fuzzy) duplicate. */
   headRefOid?: string;
+  /** Same-repo issue numbers this PR closes (GitHub closing keywords / linked issues).
+   * undefined = scanned before this field existed (unknown); [] = known to close nothing. */
+  closesIssues?: number[];
 }
 
 export interface ScoredPR extends PRItem {

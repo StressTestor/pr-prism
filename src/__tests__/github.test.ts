@@ -163,3 +163,36 @@ describe("GraphQL response → PRItem mapping", () => {
     expect(hasTests).toBe(true);
   });
 });
+
+describe("mapClosingIssues", () => {
+  const repo = "owner/repo";
+
+  it("maps same-repo closingIssuesReferences nodes to issue numbers", async () => {
+    const { mapClosingIssues } = await import("../github.js");
+    const refs = {
+      nodes: [
+        { number: 7, repository: { nameWithOwner: "owner/repo" } },
+        { number: 8, repository: { nameWithOwner: "owner/repo" } },
+      ],
+    };
+    expect(mapClosingIssues(refs, repo)).toEqual([7, 8]);
+  });
+
+  it("drops cross-repo closing refs instead of aliasing them onto same-repo numbers", async () => {
+    const { mapClosingIssues } = await import("../github.js");
+    const refs = {
+      nodes: [
+        { number: 7, repository: { nameWithOwner: "owner/OTHER" } },
+        { number: 9, repository: { nameWithOwner: "owner/repo" } },
+      ],
+    };
+    expect(mapClosingIssues(refs, repo)).toEqual([9]);
+  });
+
+  it("returns known-empty (not undefined) for missing or empty refs", async () => {
+    const { mapClosingIssues } = await import("../github.js");
+    expect(mapClosingIssues({ nodes: [] }, repo)).toEqual([]);
+    expect(mapClosingIssues(null, repo)).toEqual([]);
+    expect(mapClosingIssues(undefined, repo)).toEqual([]);
+  });
+});
