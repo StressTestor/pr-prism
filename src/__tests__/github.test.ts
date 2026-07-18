@@ -163,3 +163,17 @@ describe("GraphQL response → PRItem mapping", () => {
     expect(hasTests).toBe(true);
   });
 });
+
+describe("mapClosingIssues", () => {
+  it("maps closingIssuesReferences nodes to issue numbers", async () => {
+    const { mapClosingIssues } = await import("../github.js");
+    expect(mapClosingIssues({ nodes: [{ number: 7 }, { number: 8 }] })).toEqual([7, 8]);
+  });
+
+  it("returns known-empty (not undefined) for missing or empty refs", async () => {
+    const { mapClosingIssues } = await import("../github.js");
+    expect(mapClosingIssues({ nodes: [] })).toEqual([]);
+    expect(mapClosingIssues(null)).toEqual([]);
+    expect(mapClosingIssues(undefined)).toEqual([]);
+  });
+});

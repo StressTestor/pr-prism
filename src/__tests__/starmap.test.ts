@@ -237,3 +237,38 @@ describe("buildStarmapPayload", () => {
     expect(p.clusters[0].id).toContain("-cluster-3");
   });
 });
+
+describe("buildStarmapPayload relational classification", () => {
+  it("emits relation + closingEdges for a linked PR/issue cluster and closes on the PR item", () => {
+    const clusters = [cluster(1, [item(10, "pr", 0.6, { closesIssues: [7] }), item(7, "issue", 0.4)], 0.9, 0.88)];
+    const c = buildStarmapPayload(clusters, META).clusters[0];
+    expect(c.relation).toBe("pr-issue-linked");
+    expect(c.closingEdges).toEqual([{ pr: 10, issue: 7 }]);
+    expect(c.items.find((i) => i.number === 10)?.closes).toEqual([7]);
+    expect(c.items.find((i) => i.number === 7)?.closes).toBeUndefined();
+  });
+
+  it("keeps relation with empty closingEdges for a known-unlinked mixed cluster", () => {
+    const clusters = [cluster(1, [item(10, "pr", 0.6, { closesIssues: [] }), item(7, "issue", 0.4)], 0.9, 0.88)];
+    const c = buildStarmapPayload(clusters, META).clusters[0];
+    expect(c.relation).toBe("pr-issue-unlinked");
+    expect(c.closingEdges).toEqual([]);
+  });
+
+  it("omits relation, closingEdges, and closes entirely when a member PR predates the field", () => {
+    const clusters = [cluster(1, [item(10, "pr", 0.6), item(7, "issue", 0.4)], 0.9, 0.88)];
+    const c = buildStarmapPayload(clusters, META).clusters[0];
+    const json = JSON.stringify(c);
+    expect(json).not.toContain("relation");
+    expect(json).not.toContain("closingEdges");
+    expect(json).not.toContain('"closes"');
+  });
+
+  it("labels composition-only clusters without needing closesIssues and keeps schemaVersion 1", () => {
+    const clusters = [cluster(1, [item(1, "pr", 0.6), item(2, "pr", 0.5)], 0.93, 0.91)];
+    const p = buildStarmapPayload(clusters, META);
+    expect(p.clusters[0].relation).toBe("prs-only");
+    expect(p.clusters[0].closingEdges).toEqual([]);
+    expect(p.schemaVersion).toBe(1);
+  });
+});

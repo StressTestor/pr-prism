@@ -25,6 +25,13 @@ export function restPRState(pr: { state: string; merged_at?: string | null }): s
   return pr.merged_at ? "merged" : pr.state;
 }
 
+/** GraphQL closingIssuesReferences -> same-repo issue numbers. A fetched PR with
+ * no refs is known-empty ([]), never undefined — undefined is reserved for
+ * pre-upgrade rows where the field was never scanned. */
+export function mapClosingIssues(refs: { nodes?: Array<{ number: number }> } | null | undefined): number[] {
+  return (refs?.nodes || []).map((n) => n.number);
+}
+
 function mapCIStatus(state: string | null | undefined): PRItem["ciStatus"] {
   switch (state) {
     case "SUCCESS":
@@ -174,6 +181,7 @@ export class GitHubClient {
                   changedFiles
                   headRefOid
                   labels(first: 20) { nodes { name } }
+                  closingIssuesReferences(first: 20) { nodes { number } }
                   reviews { totalCount }
                   files(first: 100) { totalCount nodes { path } }
                   commits(last: 1) {
@@ -243,6 +251,7 @@ export class GitHubClient {
           ciStatus: mapCIStatus(ciRollup),
           reviewCount: pr.reviews?.totalCount || 0,
           hasTests,
+          closesIssues: mapClosingIssues(pr.closingIssuesReferences),
         });
       }
 

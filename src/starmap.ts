@@ -1,5 +1,6 @@
 import { decideCanonical, selectTracker } from "./canonical.js";
 import { type Confidence, confidenceTier } from "./confidence.js";
+import { type ClosingEdge, type ClusterRelation, classifyClusterRelation } from "./relations.js";
 import { sanitizeTitle } from "./sanitize.js";
 import type { Cluster } from "./types.js";
 
@@ -31,6 +32,9 @@ export interface StarmapItem extends StarmapItemRef {
   author: string;
   updatedAt: string;
   score: number;
+  /** PRs only: same-repo issue numbers this PR closes. Omitted when the item
+   * was scanned before the field existed (unknown, not "closes nothing"). */
+  closes?: number[];
 }
 
 export interface StarmapCandidate extends StarmapItemRef {
@@ -70,6 +74,11 @@ export interface StarmapCluster {
   confirmed?: boolean;
   /** For a confirmed cluster: what made it certain and the shared key. */
   identity?: { basis: "head-oid" | "patch-id"; key: string };
+  /** Deterministic member-relationship label. Omitted (with closingEdges) when
+   * any member PR predates the closesIssues scan field — unknown, not unlinked. */
+  relation?: ClusterRelation;
+  /** Resolved in-cluster PR-closes-issue pairs; present whenever relation is. */
+  closingEdges?: ClosingEdge[];
   items: StarmapItem[];
 }
 
@@ -146,13 +155,17 @@ export function buildStarmapPayload(
       candidates: trackerDecision.candidates.map(({ item, role }) => ({ ...ref(item), role, score: item.score })),
     };
     if (trackerDecision.tracker) tracker.ref = ref(trackerDecision.tracker);
-    const items: StarmapItem[] = ranked.map((it) => ({
-      ...ref(it),
-      title: sanitizeTitle(it.title),
-      author: it.author,
-      updatedAt: it.updatedAt,
-      score: it.score,
-    }));
+    const items: StarmapItem[] = ranked.map((it) => {
+      const out: StarmapItem = {
+        ...ref(it),
+        title: sanitizeTitle(it.title),
+        author: it.author,
+        updatedAt: it.updatedAt,
+        score: it.score,
+      };
+      if (it.type === "pr" && it.closesIssues !== undefined) out.closes = it.closesIssues;
+      return out;
+    });
     const kind = c.kind === "identity" ? "identity" : "cluster";
     const out: StarmapCluster = {
       id: `t${meta.threshold.toString().replace(".", "")}-${kind}-${c.id}`,
@@ -175,6 +188,11 @@ export function buildStarmapPayload(
     };
     if (c.kind === "identity") out.confirmed = true;
     if (c.identity) out.identity = c.identity;
+    const rel = classifyClusterRelation(c.items);
+    if (rel.relation !== undefined) {
+      out.relation = rel.relation;
+      out.closingEdges = rel.closingEdges;
+    }
     return out;
   });
 
