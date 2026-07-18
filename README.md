@@ -166,7 +166,13 @@ LLM_MODEL=provider/model
 
 `EMBEDDING_BASE_URL` and `LLM_BASE_URL` are optional and default to `https://api.openai.com/v1`. Unknown compatible
 embedding models must set `EMBEDDING_DIMENSIONS`; known OpenAI defaults are inferred for `text-embedding-3-small`,
-`text-embedding-3-large`, and `text-embedding-ada-002`. Embedding and LLM API keys remain separate.
+`text-embedding-3-large`, and `text-embedding-ada-002`. The `text-embedding-3-*` models and unknown compatible models
+can request provider-selected dimensions. `text-embedding-ada-002` is fixed at 1536 dimensions; explicitly setting 1536
+validates that size but does not send a dimensional-selection request. Embedding and LLM API keys remain separate.
+
+Provider-selected reduced vectors and locally truncated vectors are distinct embedding spaces. If an existing database
+was created with local truncation, run `prism re-embed` (or `prism reset`) before scanning with provider-selected
+dimensions.
 
 ## labeling
 

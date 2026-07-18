@@ -93,6 +93,16 @@ describe("VectorStore", () => {
     store.close();
   });
 
+  it("detects whether the database contains any embeddings", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+    expect(store.hasEmbeddings()).toBe(false);
+    store.upsertEmbeddingOnly("other/repo:pr:1", new Float32Array([1, 0, 0, 0]));
+    expect(store.hasEmbeddings()).toBe(true);
+    store.close();
+  });
+
   it("dimension mismatch throws", () => {
     const path = tmpDb();
     dbs.push(path);

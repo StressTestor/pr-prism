@@ -10,11 +10,20 @@ export interface ProviderConfig {
   dimensions?: number;
 }
 
-const OPENAI_MODEL_DIMENSIONS: Record<string, number> = {
-  "text-embedding-3-small": 1536,
-  "text-embedding-3-large": 3072,
-  "text-embedding-ada-002": 1536,
+interface OpenAIEmbeddingCapability {
+  nativeDimensions: number;
+  dimensionalSelection: "supported" | "fixed";
+}
+
+const OPENAI_MODEL_CAPABILITIES: Record<string, OpenAIEmbeddingCapability> = {
+  "text-embedding-3-small": { nativeDimensions: 1536, dimensionalSelection: "supported" },
+  "text-embedding-3-large": { nativeDimensions: 3072, dimensionalSelection: "supported" },
+  "text-embedding-ada-002": { nativeDimensions: 1536, dimensionalSelection: "fixed" },
 };
+
+function supportsProviderSideDimensionalSelection(model: string): boolean {
+  return OPENAI_MODEL_CAPABILITIES[model]?.dimensionalSelection !== "fixed";
+}
 
 function validateConfiguredDimensions(config: ProviderConfig): void {
   const dimensions = config.dimensions;
@@ -29,7 +38,8 @@ function validateConfiguredDimensions(config: ProviderConfig): void {
   }
 
   if (config.provider === "openai") {
-    const nativeDimensions = OPENAI_MODEL_DIMENSIONS[config.model];
+    const capability = OPENAI_MODEL_CAPABILITIES[config.model];
+    const nativeDimensions = capability?.nativeDimensions;
     if (nativeDimensions !== undefined && dimensions > nativeDimensions) {
       throw new ProviderError(
         "OpenAI Embeddings",
@@ -37,11 +47,7 @@ function validateConfiguredDimensions(config: ProviderConfig): void {
         `Use a value <= ${nativeDimensions} or remove EMBEDDING_DIMENSIONS`,
       );
     }
-    if (
-      nativeDimensions !== undefined &&
-      config.model === "text-embedding-ada-002" &&
-      dimensions !== nativeDimensions
-    ) {
+    if (capability?.dimensionalSelection === "fixed" && dimensions !== nativeDimensions) {
       throw new ProviderError(
         "OpenAI Embeddings",
         `EMBEDDING_DIMENSIONS (${dimensions}) does not match ${config.model}'s fixed dimensions (${nativeDimensions})`,
@@ -82,7 +88,8 @@ class OpenAIEmbeddings implements EmbeddingProvider {
     this.apiKey = config.apiKey;
     this.model = config.model;
     this.baseUrl = normalizeHttpBaseUrl(config.baseUrl || "https://api.openai.com/v1");
-    const dimensions = config.dimensions ?? OPENAI_MODEL_DIMENSIONS[config.model] ?? options?.defaultDimensions;
+    const dimensions =
+      config.dimensions ?? OPENAI_MODEL_CAPABILITIES[config.model]?.nativeDimensions ?? options?.defaultDimensions;
     if (!dimensions) {
       throw new ProviderError(
         "OpenAI Embeddings",
@@ -91,7 +98,11 @@ class OpenAIEmbeddings implements EmbeddingProvider {
       );
     }
     this.dimensions = dimensions;
-    if (config.dimensions !== undefined && options?.sendDimensions !== false) {
+    if (
+      config.dimensions !== undefined &&
+      options?.sendDimensions !== false &&
+      supportsProviderSideDimensionalSelection(config.model)
+    ) {
       this.requestedDimensions = config.dimensions;
     }
   }
@@ -149,11 +160,14 @@ class OpenAIEmbeddings implements EmbeddingProvider {
     const hasIndices = responseBody.data.some((entry: any) => entry?.index !== undefined);
     const ordered = new Array<any>(texts.length);
     if (hasIndices) {
+      const seenIndices = new Set<number>();
       for (const entry of responseBody.data) {
-        if (!Number.isInteger(entry?.index) || entry.index < 0 || entry.index >= texts.length || ordered[entry.index]) {
+        const index = entry?.index;
+        if (!Number.isInteger(index) || index < 0 || index >= texts.length || seenIndices.has(index)) {
           throw invalidEmbeddingResponse("response indices are missing, duplicated, or out of range");
         }
-        ordered[entry.index] = entry;
+        seenIndices.add(index);
+        ordered[index] = entry;
       }
     } else {
       ordered.splice(0, ordered.length, ...responseBody.data);
@@ -384,9 +398,47 @@ export async function createEmbeddingProvider(config: ProviderConfig): Promise<E
 // v1: "Pull Request:"/"Issue:" type prefix. v2: no prefix.
 export const EMBEDDING_TEXT_VERSION = 2;
 
-export function embeddingConfigHash(provider: string, model: string, dimensions: number, baseUrl?: string): string {
+export type EmbeddingVectorGeneration = "native" | "provider-selected-v1" | "local-truncation-v1";
+
+export function embeddingVectorGeneration(
+  provider: string,
+  model: string,
+  configuredDimensions?: number,
+): EmbeddingVectorGeneration {
+  if (configuredDimensions === undefined) return "native";
+  if (provider !== "openai") return "local-truncation-v1";
+  if (!supportsProviderSideDimensionalSelection(model)) return "native";
+
+  const nativeDimensions = OPENAI_MODEL_CAPABILITIES[model]?.nativeDimensions;
+  return nativeDimensions !== undefined && configuredDimensions >= nativeDimensions ? "native" : "provider-selected-v1";
+}
+
+export function embeddingConfigHash(
+  provider: string,
+  model: string,
+  dimensions: number,
+  baseUrl?: string,
+  vectorGeneration: EmbeddingVectorGeneration = "native",
+): string {
   const legacyHash = `${provider}:${model}:${dimensions}:t${EMBEDDING_TEXT_VERSION}`;
-  return baseUrl ? `${legacyHash}:e${endpointFingerprint(baseUrl)}` : legacyHash;
+  const endpointHash = baseUrl ? `${legacyHash}:e${endpointFingerprint(baseUrl)}` : legacyHash;
+
+  // Native output and legacy local truncation retain their established hash.
+  // Provider-selected reduction is a different vector space and must opt into a versioned identity.
+  return vectorGeneration === "provider-selected-v1" ? `${endpointHash}:v${vectorGeneration}` : endpointHash;
+}
+
+export function effectiveEmbeddingConfigHash(
+  config: Pick<ProviderConfig, "provider" | "model" | "baseUrl" | "dimensions">,
+  dimensions: number,
+): string {
+  return embeddingConfigHash(
+    config.provider,
+    config.model,
+    dimensions,
+    config.baseUrl,
+    embeddingVectorGeneration(config.provider, config.model, config.dimensions),
+  );
 }
 
 export function prepareEmbeddingText(item: { title: string; body: string; type: string }): string {

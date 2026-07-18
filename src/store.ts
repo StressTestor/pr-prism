@@ -297,6 +297,10 @@ export class VectorStore {
     return map;
   }
 
+  hasEmbeddings(): boolean {
+    return this.db.prepare("SELECT 1 FROM vec_items LIMIT 1").get() !== undefined;
+  }
+
   getAllItemsMulti(repos: string[]): StoreItem[] {
     if (repos.length === 1) return this.getAllItems(repos[0]);
     const placeholders = repos.map(() => "?").join(",");

@@ -13,7 +13,7 @@ import { findDuplicateClusters } from "./cluster.js";
 import { confidenceTier } from "./confidence.js";
 import { getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
 import { checkEmbeddingReachability } from "./doctor.js";
-import { createEmbeddingProvider, embeddingConfigHash, prepareEmbeddingText } from "./embeddings.js";
+import { createEmbeddingProvider } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { buildHousekeepingManifest } from "./housekeeping.js";
 import { findConfirmedDuplicates } from "./identity.js";
@@ -27,6 +27,7 @@ import {
 } from "./init.js";
 import {
   createPipelineContext,
+  reEmbedStoredItems,
   resolveRepos,
   runCompare,
   runDupes,
@@ -981,40 +982,23 @@ program
 
     console.log(chalk.bold(`re-embedding ${items.length} items with ${env.EMBEDDING_MODEL}...`));
 
-    // drop and recreate vec_items with new dimensions
-    store.dropVecItems();
-    store.initVecItems();
-
     const BATCH_SIZE = config.batch_size || (env.EMBEDDING_PROVIDER === "ollama" ? 50 : 10);
     const spinner = ora("Re-embedding...").start();
-    let done = 0;
-
-    for (let i = 0; i < items.length; i += BATCH_SIZE) {
-      const batch = items.slice(i, i + BATCH_SIZE);
-      const texts = batch.map((item) =>
-        prepareEmbeddingText({
-          title: item.title,
-          body: item.bodySnippet,
-          type: item.type,
-        }),
-      );
-      const embeddings = await embedder.embedBatch(texts);
-      for (let j = 0; j < batch.length; j++) {
-        store.upsertEmbeddingOnly(batch[j].id, new Float32Array(embeddings[j]));
-      }
-      done += batch.length;
-      spinner.text = `Re-embedding... ${done}/${items.length}`;
-    }
-
-    // update meta
-    store.setMeta("embedding_model", env.EMBEDDING_MODEL);
-    store.setMeta("embedding_dimensions", String(embedder.dimensions));
-    store.setMeta("embedding_provider", env.EMBEDDING_PROVIDER);
-    store.setMeta(
-      "embedding_config_hash",
-      embeddingConfigHash(env.EMBEDDING_PROVIDER, env.EMBEDDING_MODEL, embedder.dimensions, env.EMBEDDING_BASE_URL),
+    await reEmbedStoredItems(
+      store,
+      items,
+      embedder,
+      {
+        provider: env.EMBEDDING_PROVIDER,
+        model: env.EMBEDDING_MODEL,
+        baseUrl: env.EMBEDDING_BASE_URL,
+        dimensions: env.EMBEDDING_DIMENSIONS,
+      },
+      BATCH_SIZE,
+      (done, total) => {
+        spinner.text = `Re-embedding... ${done}/${total}`;
+      },
     );
-    store.setMeta("schema_version", "1");
 
     spinner.succeed(`re-embedded ${items.length} items with ${env.EMBEDDING_MODEL}`);
     store.close();

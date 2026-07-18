@@ -68,6 +68,24 @@ describe("generic OpenAI-compatible embeddings", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("accepts explicit ada-002 native dimensions without sending a dimensions request field", async () => {
+    const fetchMock = mockResponse({ data: [{ index: 0, embedding: new Array(1536).fill(0.25) }] });
+    vi.stubGlobal("fetch", fetchMock);
+    const embedder = await createEmbeddingProvider({
+      provider: "openai",
+      apiKey: "key",
+      model: "text-embedding-ada-002",
+      dimensions: 1536,
+    });
+
+    const vector = await embedder.embed("probe");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body).toEqual({ input: ["probe"], model: "text-embedding-ada-002" });
+    expect(body).not.toHaveProperty("dimensions");
+    expect(vector).toHaveLength(1536);
+  });
+
   it("accepts and sends a valid lower dimension for an OpenAI model that supports selection", async () => {
     const fetchMock = mockResponse({ data: [{ index: 0, embedding: new Array(512).fill(0.25) }] });
     vi.stubGlobal("fetch", fetchMock);
@@ -172,6 +190,74 @@ describe("generic OpenAI-compatible embeddings", () => {
     });
     await expect(embedder.embedBatch(["one", "two"])).rejects.toBeInstanceOf(ProviderError);
     await expect(embedder.embedBatch(["one", "two"])).rejects.toThrow(/returned 1 vectors for 2 inputs/);
+  });
+
+  it("rejects duplicate response indices even when the output count matches", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockResponse({
+        data: [
+          { index: 0, embedding: [1, 2] },
+          { index: 0, embedding: [3, 4] },
+        ],
+      }),
+    );
+    const embedder = await createEmbeddingProvider({
+      provider: "openai",
+      apiKey: "key",
+      model: "custom",
+      dimensions: 2,
+    });
+
+    const error = await embedder.embedBatch(["one", "two"]).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.message).toMatch(/indices are missing, duplicated, or out of range/);
+  });
+
+  it("rejects a mixed indexed and unindexed response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockResponse({
+        data: [{ index: 0, embedding: [1, 2] }, { embedding: [3, 4] }],
+      }),
+    );
+    const embedder = await createEmbeddingProvider({
+      provider: "openai",
+      apiKey: "key",
+      model: "custom",
+      dimensions: 2,
+    });
+
+    await expect(embedder.embedBatch(["one", "two"])).rejects.toThrow(
+      /indices are missing, duplicated, or out of range/,
+    );
+  });
+
+  it.each([
+    ["negative", -1],
+    ["out-of-range", 2],
+    ["fractional", 0.5],
+  ])("rejects a %s response index", async (_label, invalidIndex) => {
+    vi.stubGlobal(
+      "fetch",
+      mockResponse({
+        data: [
+          { index: 0, embedding: [1, 2] },
+          { index: invalidIndex, embedding: [3, 4] },
+        ],
+      }),
+    );
+    const embedder = await createEmbeddingProvider({
+      provider: "openai",
+      apiKey: "key",
+      model: "custom",
+      dimensions: 2,
+    });
+
+    await expect(embedder.embedBatch(["one", "two"])).rejects.toThrow(
+      /indices are missing, duplicated, or out of range/,
+    );
   });
 
   it("rejects a successful response without a data array", async () => {
