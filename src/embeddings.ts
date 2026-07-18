@@ -1,25 +1,99 @@
 import { classifyFetchError, classifyHttpError, ProviderError } from "./errors.js";
+import { endpointFingerprint, normalizeHttpBaseUrl } from "./provider-url.js";
 import type { EmbeddingProvider } from "./types.js";
 
-interface ProviderConfig {
+export interface ProviderConfig {
   provider: string;
   apiKey?: string;
   model: string;
   baseUrl?: string;
+  dimensions?: number;
+}
+
+const OPENAI_MODEL_DIMENSIONS: Record<string, number> = {
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+  "text-embedding-ada-002": 1536,
+};
+
+function validateConfiguredDimensions(config: ProviderConfig): void {
+  const dimensions = config.dimensions;
+  if (dimensions === undefined) return;
+
+  if (!Number.isFinite(dimensions) || !Number.isInteger(dimensions) || dimensions <= 0) {
+    throw new ProviderError(
+      "Embeddings",
+      "EMBEDDING_DIMENSIONS must be a positive integer",
+      "Set EMBEDDING_DIMENSIONS to a finite whole number greater than zero",
+    );
+  }
+
+  if (config.provider === "openai") {
+    const nativeDimensions = OPENAI_MODEL_DIMENSIONS[config.model];
+    if (nativeDimensions !== undefined && dimensions > nativeDimensions) {
+      throw new ProviderError(
+        "OpenAI Embeddings",
+        `EMBEDDING_DIMENSIONS (${dimensions}) exceeds ${config.model}'s native maximum (${nativeDimensions})`,
+        `Use a value <= ${nativeDimensions} or remove EMBEDDING_DIMENSIONS`,
+      );
+    }
+    if (
+      nativeDimensions !== undefined &&
+      config.model === "text-embedding-ada-002" &&
+      dimensions !== nativeDimensions
+    ) {
+      throw new ProviderError(
+        "OpenAI Embeddings",
+        `EMBEDDING_DIMENSIONS (${dimensions}) does not match ${config.model}'s fixed dimensions (${nativeDimensions})`,
+        `Use ${nativeDimensions} or remove EMBEDDING_DIMENSIONS`,
+      );
+    }
+  }
+}
+
+function invalidEmbeddingResponse(reason: string): ProviderError {
+  return new ProviderError(
+    "OpenAI Embeddings",
+    `Invalid embedding response: ${reason}`,
+    "Check that the API base URL, model, and EMBEDDING_DIMENSIONS are correct",
+  );
+}
+
+function validateVector(vector: unknown, expectedDimensions: number, position: number): number[] {
+  if (!Array.isArray(vector)) throw invalidEmbeddingResponse(`entry ${position} is missing an embedding array`);
+  if (vector.length !== expectedDimensions) {
+    throw invalidEmbeddingResponse(`entry ${position} has ${vector.length} dimensions; expected ${expectedDimensions}`);
+  }
+  if (!vector.every((value) => typeof value === "number" && Number.isFinite(value))) {
+    throw invalidEmbeddingResponse(`entry ${position} contains a non-finite numeric value`);
+  }
+  return vector;
 }
 
 class OpenAIEmbeddings implements EmbeddingProvider {
   private apiKey: string;
   private model: string;
   private baseUrl: string;
-  dimensions = 1536;
+  private requestedDimensions?: number;
+  dimensions: number;
 
-  constructor(config: ProviderConfig) {
+  constructor(config: ProviderConfig, options?: { defaultDimensions?: number; sendDimensions?: boolean }) {
     if (!config.apiKey) throw new Error("EMBEDDING_API_KEY required for OpenAI");
     this.apiKey = config.apiKey;
     this.model = config.model;
-    this.baseUrl = config.baseUrl || "https://api.openai.com/v1";
-    if (config.model.includes("3-large")) this.dimensions = 3072;
+    this.baseUrl = normalizeHttpBaseUrl(config.baseUrl || "https://api.openai.com/v1");
+    const dimensions = config.dimensions ?? OPENAI_MODEL_DIMENSIONS[config.model] ?? options?.defaultDimensions;
+    if (!dimensions) {
+      throw new ProviderError(
+        "OpenAI Embeddings",
+        `Unknown embedding dimensions for model ${config.model}; Set EMBEDDING_DIMENSIONS`,
+        "Set EMBEDDING_DIMENSIONS to the model's output dimensions",
+      );
+    }
+    this.dimensions = dimensions;
+    if (config.dimensions !== undefined && options?.sendDimensions !== false) {
+      this.requestedDimensions = config.dimensions;
+    }
   }
 
   async embed(text: string): Promise<number[]> {
@@ -40,24 +114,51 @@ class OpenAIEmbeddings implements EmbeddingProvider {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.apiKey}`,
         },
-        body: JSON.stringify({ input: sanitized, model: this.model }),
+        body: JSON.stringify({
+          input: sanitized,
+          model: this.model,
+          ...(this.requestedDimensions === undefined ? {} : { dimensions: this.requestedDimensions }),
+        }),
       });
     } catch (err: any) {
-      throw classifyFetchError("OpenAI Embeddings", err, { apiKeyEnvVar: "EMBEDDING_API_KEY" });
+      throw classifyFetchError("OpenAI Embeddings", err, {
+        apiKeyEnvVar: "EMBEDDING_API_KEY",
+        secrets: [this.apiKey],
+      });
     }
     if (!resp.ok) {
       const body = await resp.text();
-      throw classifyHttpError("OpenAI Embeddings", resp.status, body, { apiKeyEnvVar: "EMBEDDING_API_KEY" });
+      throw classifyHttpError("OpenAI Embeddings", resp.status, body, {
+        apiKeyEnvVar: "EMBEDDING_API_KEY",
+        secrets: [this.apiKey],
+      });
     }
-    const data = (await resp.json()) as any;
-    if (!data.data || !Array.isArray(data.data)) {
-      throw new ProviderError(
-        "OpenAI Embeddings",
-        "Unexpected response format (missing data array)",
-        "Check the API base URL and model name are correct",
-      );
+    let responseBody: any;
+    try {
+      responseBody = await resp.json();
+    } catch {
+      throw invalidEmbeddingResponse("body is not valid JSON");
     }
-    return data.data.map((d: any) => d.embedding);
+    if (!Array.isArray(responseBody?.data)) {
+      throw invalidEmbeddingResponse("missing data array");
+    }
+    if (responseBody.data.length !== texts.length) {
+      throw invalidEmbeddingResponse(`returned ${responseBody.data.length} vectors for ${texts.length} inputs`);
+    }
+
+    const hasIndices = responseBody.data.some((entry: any) => entry?.index !== undefined);
+    const ordered = new Array<any>(texts.length);
+    if (hasIndices) {
+      for (const entry of responseBody.data) {
+        if (!Number.isInteger(entry?.index) || entry.index < 0 || entry.index >= texts.length || ordered[entry.index]) {
+          throw invalidEmbeddingResponse("response indices are missing, duplicated, or out of range");
+        }
+        ordered[entry.index] = entry;
+      }
+    } else {
+      ordered.splice(0, ordered.length, ...responseBody.data);
+    }
+    return ordered.map((entry, index) => validateVector(entry?.embedding, this.dimensions, index));
   }
 }
 
@@ -66,10 +167,15 @@ class KimiEmbeddings implements EmbeddingProvider {
   dimensions = 1024;
 
   constructor(config: ProviderConfig) {
-    this.inner = new OpenAIEmbeddings({
-      ...config,
-      baseUrl: "https://api.moonshot.cn/v1",
-    });
+    this.inner = new OpenAIEmbeddings(
+      {
+        provider: config.provider,
+        apiKey: config.apiKey,
+        model: config.model,
+        baseUrl: "https://api.moonshot.cn/v1",
+      },
+      { defaultDimensions: 1024, sendDimensions: false },
+    );
   }
 
   embed(text: string) {
@@ -88,7 +194,7 @@ class OllamaEmbeddings implements EmbeddingProvider {
 
   constructor(config: ProviderConfig) {
     this.model = config.model || "nomic-embed-text";
-    this.baseUrl = config.baseUrl || "http://localhost:11434";
+    this.baseUrl = normalizeHttpBaseUrl(config.baseUrl || "http://localhost:11434");
   }
 
   async init(): Promise<void> {
@@ -126,8 +232,37 @@ class OllamaEmbeddings implements EmbeddingProvider {
         "Check that Ollama is up to date and the model supports embeddings",
       );
     }
+    if (data.embeddings.length !== texts.length) {
+      throw new ProviderError(
+        "Ollama",
+        `Invalid embedding response: returned ${data.embeddings.length} vectors for ${texts.length} inputs`,
+        "Check that Ollama is up to date and the model supports embeddings",
+      );
+    }
+    const expectedDimensions = this.dimensions || data.embeddings[0]?.length;
+    if (!Number.isInteger(expectedDimensions) || expectedDimensions <= 0) {
+      throw new ProviderError(
+        "Ollama",
+        "Invalid embedding response: vector dimensions are missing",
+        "Check that Ollama is up to date and the model supports embeddings",
+      );
+    }
+    if (
+      !data.embeddings.every(
+        (vector: unknown) =>
+          Array.isArray(vector) &&
+          vector.length === expectedDimensions &&
+          vector.every((value) => typeof value === "number" && Number.isFinite(value)),
+      )
+    ) {
+      throw new ProviderError(
+        "Ollama",
+        "Invalid embedding response: vectors contain invalid values or dimensions",
+        "Check that Ollama is up to date and the model supports embeddings",
+      );
+    }
     if (!this.initialized) {
-      this.dimensions = data.embeddings[0].length;
+      this.dimensions = expectedDimensions;
       this.initialized = true;
     }
     return data.embeddings;
@@ -188,11 +323,15 @@ class JinaEmbeddings implements EmbeddingProvider {
   dimensions = 1024;
 
   constructor(config: ProviderConfig) {
-    this.inner = new OpenAIEmbeddings({
-      ...config,
-      baseUrl: "https://api.jina.ai/v1",
-      model: config.model || "jina-embeddings-v3",
-    });
+    this.inner = new OpenAIEmbeddings(
+      {
+        provider: config.provider,
+        apiKey: config.apiKey,
+        baseUrl: "https://api.jina.ai/v1",
+        model: config.model || "jina-embeddings-v3",
+      },
+      { defaultDimensions: 1024, sendDimensions: false },
+    );
   }
 
   embed(text: string) {
@@ -203,21 +342,37 @@ class JinaEmbeddings implements EmbeddingProvider {
   }
 }
 
+function withLocalDimensions(provider: EmbeddingProvider, dimensions?: number): EmbeddingProvider {
+  if (dimensions === undefined || dimensions === provider.dimensions) return provider;
+  if (dimensions > provider.dimensions) {
+    throw new Error(
+      `EMBEDDING_DIMENSIONS (${dimensions}) exceeds model's native dimensions (${provider.dimensions}). ` +
+        `use a value <= ${provider.dimensions} or remove EMBEDDING_DIMENSIONS.`,
+    );
+  }
+  return {
+    dimensions,
+    embed: async (text) => (await provider.embed(text)).slice(0, dimensions),
+    embedBatch: async (texts) => (await provider.embedBatch(texts)).map((vector) => vector.slice(0, dimensions)),
+  };
+}
+
 export async function createEmbeddingProvider(config: ProviderConfig): Promise<EmbeddingProvider> {
+  validateConfiguredDimensions(config);
   switch (config.provider) {
     case "openai":
       return new OpenAIEmbeddings(config);
     case "kimi":
-      return new KimiEmbeddings(config);
+      return withLocalDimensions(new KimiEmbeddings(config), config.dimensions);
     case "ollama": {
       const provider = new OllamaEmbeddings(config);
       await provider.init();
-      return provider;
+      return withLocalDimensions(provider, config.dimensions);
     }
     case "voyageai":
-      return new VoyageEmbeddings(config);
+      return withLocalDimensions(new VoyageEmbeddings(config), config.dimensions);
     case "jina":
-      return new JinaEmbeddings(config);
+      return withLocalDimensions(new JinaEmbeddings(config), config.dimensions);
     default:
       throw new Error(`Unknown embedding provider: ${config.provider}`);
   }
@@ -229,8 +384,9 @@ export async function createEmbeddingProvider(config: ProviderConfig): Promise<E
 // v1: "Pull Request:"/"Issue:" type prefix. v2: no prefix.
 export const EMBEDDING_TEXT_VERSION = 2;
 
-export function embeddingConfigHash(provider: string, model: string, dimensions: number): string {
-  return `${provider}:${model}:${dimensions}:t${EMBEDDING_TEXT_VERSION}`;
+export function embeddingConfigHash(provider: string, model: string, dimensions: number, baseUrl?: string): string {
+  const legacyHash = `${provider}:${model}:${dimensions}:t${EMBEDDING_TEXT_VERSION}`;
+  return baseUrl ? `${legacyHash}:e${endpointFingerprint(baseUrl)}` : legacyHash;
 }
 
 export function prepareEmbeddingText(item: { title: string; body: string; type: string }): string {

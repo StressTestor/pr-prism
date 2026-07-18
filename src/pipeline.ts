@@ -12,7 +12,7 @@ import { escapeTableCell, sanitizeTitle } from "./sanitize.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
 import { cosineSimilarity, isZeroVector } from "./similarity.js";
 import { VectorStore } from "./store.js";
-import type { EmbeddingProvider, PipelineContext, PRItem, StoreItem } from "./types.js";
+import type { PipelineContext, PRItem, StoreItem } from "./types.js";
 import { checkVisionAlignment } from "./vision.js";
 import { createWriteGate, resolveWriteMode } from "./write-gate.js";
 
@@ -56,36 +56,11 @@ export async function createPipelineContext(repoOverride?: string): Promise<Pipe
     provider: env.EMBEDDING_PROVIDER,
     apiKey: env.EMBEDDING_API_KEY,
     model: env.EMBEDDING_MODEL,
+    baseUrl: env.EMBEDDING_BASE_URL,
+    dimensions: env.EMBEDDING_DIMENSIONS,
   });
-  // Matryoshka dimension truncation
-  const targetDims = env.EMBEDDING_DIMENSIONS;
-  if (targetDims && targetDims > embedder.dimensions) {
-    throw new Error(
-      `EMBEDDING_DIMENSIONS (${targetDims}) exceeds model's native dimensions (${embedder.dimensions}). ` +
-        `use a value <= ${embedder.dimensions} or remove EMBEDDING_DIMENSIONS.`,
-    );
-  }
-  const effectiveDims = targetDims || embedder.dimensions;
-
-  // Wrap embedder to truncate if needed
-  const wrappedEmbedder =
-    targetDims && targetDims < embedder.dimensions
-      ? {
-          dimensions: targetDims,
-          embed: async (text: string) => {
-            const full = await embedder.embed(text);
-            return full.slice(0, targetDims);
-          },
-          embedBatch: async (texts: string[]) => {
-            const full = await embedder.embedBatch(texts);
-            return full.map((v) => v.slice(0, targetDims));
-          },
-          init: () => Promise.resolve(),
-        }
-      : embedder;
-
-  const store = new VectorStore(undefined, effectiveDims, env.EMBEDDING_MODEL);
-  return { config, env, owner, repo, repoFull, github, store, embedder: wrappedEmbedder as EmbeddingProvider };
+  const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL);
+  return { config, env, owner, repo, repoFull, github, store, embedder };
 }
 
 export async function runScan(
@@ -189,7 +164,12 @@ export async function runScan(
 
   // Store/update embedding metadata on every scan. The hash includes the
   // embed-text format version, so changing prepareEmbeddingText trips the warning.
-  const configHash = embeddingConfigHash(env.EMBEDDING_PROVIDER, env.EMBEDDING_MODEL, embedder.dimensions);
+  const configHash = embeddingConfigHash(
+    env.EMBEDDING_PROVIDER,
+    env.EMBEDDING_MODEL,
+    embedder.dimensions,
+    env.EMBEDDING_BASE_URL,
+  );
   const storedHash = store.getMeta("embedding_config_hash");
   if (storedHash && storedHash !== configHash && newItems.length > 0) {
     console.log(

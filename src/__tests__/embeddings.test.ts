@@ -45,4 +45,36 @@ describe("embeddingConfigHash", () => {
   it("stays stable for the same provider/model/dims/version", () => {
     expect(embeddingConfigHash("jina", "jina-v3", 1024)).toBe(embeddingConfigHash("jina", "jina-v3", 1024));
   });
+
+  it("preserves the legacy hash format without a custom URL", () => {
+    expect(embeddingConfigHash("openai", "text-embedding-3-small", 1536)).toBe(
+      `openai:text-embedding-3-small:1536:t${EMBEDDING_TEXT_VERSION}`,
+    );
+  });
+
+  it("normalizes trailing slashes in custom endpoint fingerprints", () => {
+    expect(embeddingConfigHash("openai", "custom", 1024, "https://example.com/v1/")).toBe(
+      embeddingConfigHash("openai", "custom", 1024, "https://example.com/v1///"),
+    );
+  });
+
+  it("distinguishes endpoint origins and paths", () => {
+    const first = embeddingConfigHash("openai", "custom", 1024, "https://one.example/v1");
+    expect(first).not.toBe(embeddingConfigHash("openai", "custom", 1024, "https://two.example/v1"));
+    expect(first).not.toBe(embeddingConfigHash("openai", "custom", 1024, "https://one.example/v2"));
+  });
+
+  it("does not include raw endpoints, credentials, queries, or fragments", () => {
+    const hash = embeddingConfigHash(
+      "openai",
+      "custom",
+      1024,
+      "https://user:password@example.com/v1?api_key=secret#private",
+    );
+    expect(hash).not.toContain("example.com");
+    expect(hash).not.toContain("password");
+    expect(hash).not.toContain("api_key");
+    expect(hash).not.toContain("private");
+    expect(hash).toBe(embeddingConfigHash("openai", "custom", 1024, "https://example.com/v1"));
+  });
 });

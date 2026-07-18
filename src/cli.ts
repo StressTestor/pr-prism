@@ -7,16 +7,24 @@ import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import { Command } from "commander";
 import ora from "ora";
-import { runBenchmark } from "./benchmark.js";
+import { parseBenchmarkDimensions, runBenchmark } from "./benchmark.js";
 import { selectCanonical } from "./canonical.js";
 import { findDuplicateClusters } from "./cluster.js";
 import { confidenceTier } from "./confidence.js";
 import { getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
-import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
+import { checkEmbeddingReachability } from "./doctor.js";
+import { createEmbeddingProvider, embeddingConfigHash, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { buildHousekeepingManifest } from "./housekeeping.js";
 import { findConfirmedDuplicates } from "./identity.js";
-import { applyEmbeddingKey, detectRepoFromGit, injectRepoIntoConfig, resolveInitRepo, verifyInit } from "./init.js";
+import {
+  applyEmbeddingKey,
+  detectRepoFromGit,
+  injectRepoIntoConfig,
+  resolveInitRepo,
+  verifyInit,
+  verifyInitEmbedding,
+} from "./init.js";
 import {
   createPipelineContext,
   resolveRepos,
@@ -237,12 +245,13 @@ program
         },
         checkEmbedding: async () => {
           const en = loadEnvConfig();
-          await createEmbeddingProvider({
+          return verifyInitEmbedding({
             provider: en.EMBEDDING_PROVIDER,
             apiKey: en.EMBEDDING_API_KEY,
             model: en.EMBEDDING_MODEL,
+            baseUrl: en.EMBEDDING_BASE_URL,
+            dimensions: en.EMBEDDING_DIMENSIONS,
           });
-          return true;
         },
       });
       for (const ch of checks) {
@@ -319,16 +328,15 @@ program
 
     // 4. Embedding provider reachable
     if (env) {
-      try {
-        const embedder = await createEmbeddingProvider({
-          provider: env.EMBEDDING_PROVIDER,
-          apiKey: env.EMBEDDING_API_KEY,
-          model: env.EMBEDDING_MODEL,
-        });
-        pass("embedding", `${env.EMBEDDING_PROVIDER} (${env.EMBEDDING_MODEL}, ${embedder.dimensions} dims)`);
-      } catch (e: any) {
-        fail("embedding", e.remedy || e.message);
-      }
+      const embeddingCheck = await checkEmbeddingReachability({
+        provider: env.EMBEDDING_PROVIDER,
+        apiKey: env.EMBEDDING_API_KEY,
+        model: env.EMBEDDING_MODEL,
+        baseUrl: env.EMBEDDING_BASE_URL,
+        dimensions: env.EMBEDDING_DIMENSIONS,
+      });
+      if (embeddingCheck.status === "pass") pass(embeddingCheck.name, embeddingCheck.detail);
+      else fail(embeddingCheck.name, embeddingCheck.detail);
     }
 
     // 5. LLM provider reachable (just check config, don't make a full call)
@@ -662,6 +670,8 @@ program
       provider: env.EMBEDDING_PROVIDER,
       apiKey: env.EMBEDDING_API_KEY,
       model: env.EMBEDDING_MODEL,
+      baseUrl: env.EMBEDDING_BASE_URL,
+      dimensions: env.EMBEDDING_DIMENSIONS,
     });
     const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL);
 
@@ -703,12 +713,14 @@ program
                 provider: env.LLM_PROVIDER,
                 apiKey: env.LLM_API_KEY,
                 model: opts.model || env.LLM_MODEL,
+                baseUrl: env.LLM_BASE_URL,
               });
             } else {
               result = await reviewPR(item.title, item.body, "(no diff - this is an issue, not a PR)", {
                 provider: env.LLM_PROVIDER,
                 apiKey: env.LLM_API_KEY,
                 model: opts.model || env.LLM_MODEL,
+                baseUrl: env.LLM_BASE_URL,
               });
             }
             store.saveReview(repoFull, item.number, item.type, env.LLM_PROVIDER, opts.model || env.LLM_MODEL, result);
@@ -755,6 +767,7 @@ program
           provider: env.LLM_PROVIDER,
           apiKey: env.LLM_API_KEY,
           model: opts.model || env.LLM_MODEL,
+          baseUrl: env.LLM_BASE_URL,
         });
         store.saveReview(repoFull, num, "issue", env.LLM_PROVIDER, opts.model || env.LLM_MODEL, result);
         reviewSpinner.succeed("Review complete");
@@ -784,6 +797,7 @@ program
           provider: env.LLM_PROVIDER,
           apiKey: env.LLM_API_KEY,
           model: opts.model || env.LLM_MODEL,
+          baseUrl: env.LLM_BASE_URL,
         });
         store.saveReview(repoFull, num, "pr", env.LLM_PROVIDER, opts.model || env.LLM_MODEL, result);
         reviewSpinner.succeed("Review complete");
@@ -887,10 +901,20 @@ program
   .command("benchmark")
   .description("Compare embedding models for duplicate detection quality and speed")
   .option("-r, --repo <owner/repo>", "Repository to benchmark against")
-  .option("--models <models>", "Comma-separated Ollama models to compare", "nomic-embed-text,qwen3-embedding:0.6b")
+  .option("--provider <provider>", "Embedding provider (defaults to Ollama)")
+  .option("--base-url <url>", "OpenAI-compatible base URL (falls back to EMBEDDING_BASE_URL)")
+  .option("--dimensions <integer>", "Output dimensions (falls back to EMBEDDING_DIMENSIONS)", parseBenchmarkDimensions)
+  .option("--models <models>", "Comma-separated embedding models to compare", "nomic-embed-text,qwen3-embedding:0.6b")
   .option("--thresholds <thresholds>", "Comma-separated similarity thresholds", "0.82,0.85")
   .action(async (opts) => {
-    await runBenchmark({ repo: opts.repo, models: opts.models, thresholds: opts.thresholds });
+    await runBenchmark({
+      repo: opts.repo,
+      provider: opts.provider,
+      baseUrl: opts.baseUrl,
+      dimensions: opts.dimensions,
+      models: opts.models,
+      thresholds: opts.thresholds,
+    });
   });
 
 // ── reset ───────────────────────────────────────────────────────
@@ -941,6 +965,8 @@ program
       provider: env.EMBEDDING_PROVIDER,
       apiKey: env.EMBEDDING_API_KEY,
       model: env.EMBEDDING_MODEL,
+      baseUrl: env.EMBEDDING_BASE_URL,
+      dimensions: env.EMBEDDING_DIMENSIONS,
     });
 
     // open store without model check — we're intentionally changing models
@@ -983,6 +1009,11 @@ program
     // update meta
     store.setMeta("embedding_model", env.EMBEDDING_MODEL);
     store.setMeta("embedding_dimensions", String(embedder.dimensions));
+    store.setMeta("embedding_provider", env.EMBEDDING_PROVIDER);
+    store.setMeta(
+      "embedding_config_hash",
+      embeddingConfigHash(env.EMBEDDING_PROVIDER, env.EMBEDDING_MODEL, embedder.dimensions, env.EMBEDDING_BASE_URL),
+    );
     store.setMeta("schema_version", "1");
 
     spinner.succeed(`re-embedded ${items.length} items with ${env.EMBEDDING_MODEL}`);

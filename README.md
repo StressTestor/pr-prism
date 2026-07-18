@@ -87,7 +87,14 @@ prism dupes --json | jq '.bestPick' # machine-readable NDJSON
 prism compare 42 99          # check similarity between two items
 prism benchmark --repo sst/opencode                              # compare default models
 prism benchmark --models nomic-embed-text,qwen3-embedding:0.6b    # specify models
+prism benchmark --provider openai --base-url https://compatible-provider.example/v1 \
+  --dimensions 1024 --models provider/model-a,provider/model-b
 ```
+
+`prism benchmark` defaults to Ollama and retains automatic local model checks/pulls. Custom providers use the generic
+embedding configuration below; credentials always come from `EMBEDDING_API_KEY`. Never supply API keys as command-line
+arguments. The benchmark refetches the current repository population once and compares cluster overlap and speed across
+models; it is not a labelled accuracy benchmark.
 
 ## zero cost setup
 
@@ -140,6 +147,26 @@ cross-repo dupe display: `[owner/repo1] #1234 <-> [owner/repo2] #567`
 | LLM | anthropic | paid | |
 | LLM | kimi | free tier | |
 | LLM | ollama | free | local |
+
+OpenAI-compatible embedding and chat endpoints use the existing generic `openai` provider. Featherless.ai is one tested
+compatible endpoint; it does not require a dedicated provider name or vendor-specific environment variables.
+
+```dotenv
+EMBEDDING_PROVIDER=openai
+EMBEDDING_BASE_URL=https://compatible-provider.example/v1
+EMBEDDING_API_KEY=your_embedding_key
+EMBEDDING_MODEL=provider/model
+EMBEDDING_DIMENSIONS=1024
+
+LLM_PROVIDER=openai
+LLM_BASE_URL=https://compatible-provider.example/v1
+LLM_API_KEY=your_llm_key
+LLM_MODEL=provider/model
+```
+
+`EMBEDDING_BASE_URL` and `LLM_BASE_URL` are optional and default to `https://api.openai.com/v1`. Unknown compatible
+embedding models must set `EMBEDDING_DIMENSIONS`; known OpenAI defaults are inferred for `text-embedding-3-small`,
+`text-embedding-3-large`, and `text-embedding-ada-002`. Embedding and LLM API keys remain separate.
 
 ## labeling
 
@@ -268,7 +295,8 @@ ctx.store.close();
 
 ## performance
 
-- matryoshka truncation: `EMBEDDING_DIMENSIONS=512` in .env halves storage with 91% clustering agreement
+- dimensional selection: OpenAI-compatible endpoints receive `EMBEDDING_DIMENSIONS` in the request; other providers use
+  local Matryoshka truncation when supported
 - ANN pre-filtering kicks in at 5000+ items automatically
 - incremental scan: only embeds new/changed items
 - crash recovery: resumes from last embedded item

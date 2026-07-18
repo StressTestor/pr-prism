@@ -1,5 +1,17 @@
-import { describe, expect, it } from "vitest";
-import { applyEmbeddingKey, detectRepoFromGit, injectRepoIntoConfig, resolveInitRepo, verifyInit } from "../init.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  applyEmbeddingKey,
+  detectRepoFromGit,
+  injectRepoIntoConfig,
+  resolveInitRepo,
+  verifyInit,
+  verifyInitEmbedding,
+} from "../init.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("detectRepoFromGit", () => {
   it("parses owner/repo from an https origin", () => {
@@ -151,5 +163,66 @@ describe("verifyInit", () => {
     const checks = await verifyInit({ ...okDeps, network: false });
     expect(checks.find((c) => c.name === "github")).toBeUndefined();
     expect(checks.find((c) => c.name === "embedding")).toBeUndefined();
+  });
+
+  it("performs a real embedding request before reporting init verification success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ data: [{ index: 0, embedding: [1, 2] }] }),
+      text: () => Promise.resolve(""),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const checks = await verifyInit({
+      ...okDeps,
+      checkEmbedding: () =>
+        verifyInitEmbedding({
+          provider: "openai",
+          apiKey: "init-key",
+          model: "custom",
+          baseUrl: "https://compatible.example/v1",
+          dimensions: 2,
+        }),
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(checks.find((check) => check.name === "embedding")?.status).toBe("pass");
+  });
+
+  it("reports init embedding verification failure for an unreachable or unauthorized provider", async () => {
+    const secret = "init-secret-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({}),
+        text: () => Promise.resolve(`unauthorized ${secret}`),
+      }),
+    );
+
+    const checks = await verifyInit({
+      ...okDeps,
+      checkEmbedding: () => verifyInitEmbedding({ provider: "openai", apiKey: secret, model: "custom", dimensions: 2 }),
+    });
+    const embedding = checks.find((check) => check.name === "embedding");
+
+    expect(embedding?.status).toBe("fail");
+    expect(embedding?.detail).toContain("Check EMBEDDING_API_KEY in your .env");
+    expect(embedding?.detail).not.toContain(secret);
+  });
+
+  it("does not probe Ollama twice during init verification", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ embeddings: [[1, 2, 3]] }),
+      text: () => Promise.resolve(""),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(verifyInitEmbedding({ provider: "ollama", model: "nomic-embed-text" })).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

@@ -16,8 +16,21 @@ export class ProviderError extends Error {
   }
 }
 
-export function classifyFetchError(provider: string, err: any, _opts?: { apiKeyEnvVar?: string }): ProviderError {
-  const msg = err?.message || String(err);
+interface ProviderErrorOptions {
+  apiKeyEnvVar?: string;
+  secrets?: Array<string | undefined>;
+}
+
+function redactSecrets(value: string, secrets: Array<string | undefined> = []): string {
+  let sanitized = value;
+  for (const secret of secrets) {
+    if (secret) sanitized = sanitized.split(secret).join("[REDACTED]");
+  }
+  return sanitized;
+}
+
+export function classifyFetchError(provider: string, err: any, opts?: ProviderErrorOptions): ProviderError {
+  const msg = redactSecrets(err?.message || String(err), opts?.secrets);
   const code = err?.code || err?.cause?.code;
 
   // Network errors
@@ -38,8 +51,16 @@ export function classifyFetchError(provider: string, err: any, _opts?: { apiKeyE
     );
   }
 
-  // Pass through ProviderErrors
-  if (err instanceof ProviderError) return err;
+  // Preserve project-standard errors while still redacting configured secrets.
+  if (err instanceof ProviderError) {
+    if (!opts?.secrets?.some(Boolean)) return err;
+    return new ProviderError(
+      err.provider,
+      redactSecrets(err.reason, opts?.secrets),
+      redactSecrets(err.remedy, opts?.secrets),
+      err.statusCode,
+    );
+  }
 
   return new ProviderError(provider, msg, "Check your configuration and try again");
 }
@@ -63,16 +84,17 @@ export function classifyHttpError(
   provider: string,
   status: number,
   body: string,
-  opts?: { apiKeyEnvVar?: string },
+  opts?: ProviderErrorOptions,
 ): ProviderError {
   const envVar = opts?.apiKeyEnvVar || "API key";
+  const sanitizedBody = redactSecrets(body, opts?.secrets);
 
   switch (status) {
     case 401:
       return new ProviderError(provider, "Invalid API key", `Check ${envVar} in your .env`);
     case 403: {
       if (provider === "GitHub") {
-        if (body.includes("scope") || body.includes("permission")) {
+        if (sanitizedBody.includes("scope") || sanitizedBody.includes("permission")) {
           return new ProviderError(
             provider,
             "Token lacks required scopes",
@@ -89,11 +111,11 @@ export function classifyHttpError(
     }
     case 404:
       if (provider === "Ollama") {
-        const modelMatch = body.match(/model ['"]?([^'"]+)['"]?/i);
+        const modelMatch = sanitizedBody.match(/model ['"]?([^'"]+)['"]?/i);
         const model = modelMatch?.[1] || "the requested model";
         return new ProviderError(provider, `Model not found: ${model}`, `Pull it with: ollama pull ${model}`);
       }
-      return new ProviderError(provider, `Not found (404): ${body.slice(0, 100)}`, "Check your configuration");
+      return new ProviderError(provider, `Not found (404): ${sanitizedBody.slice(0, 100)}`, "Check your configuration");
     case 429:
       return new ProviderError(provider, "Rate limited", "Waiting before retry...");
     case 500:
@@ -101,6 +123,10 @@ export function classifyHttpError(
     case 503:
       return new ProviderError(provider, `Server error (${status})`, `${provider} may be down. Try again later`);
     default:
-      return new ProviderError(provider, `Returned ${status}: ${body.slice(0, 200)}`, "Check your .env configuration");
+      return new ProviderError(
+        provider,
+        `Returned ${status}: ${sanitizedBody.slice(0, 200)}`,
+        "Check your .env configuration",
+      );
   }
 }
