@@ -29,7 +29,7 @@ src/                    # CLI tool (published to npm as prism-triage)
   init.ts               # `prism init` logic: git-remote repo detect/inject + post-init verify (testable, extracted from cli)
   pipeline.ts           # orchestrates scan -> embed -> cluster -> score -> vision -> review
   github.ts             # GraphQL + REST client, rate limiting, backoff
-  embeddings.ts         # 5 embedding providers, batch processing, dimension detection
+  embeddings.ts         # 5 embedding providers, batch processing, dimension detection; generic openai provider honors EMBEDDING_BASE_URL (any OpenAI-compatible endpoint) + explicit EMBEDDING_DIMENSIONS for unknown models; provider-selected reduction carries a versioned vector-space identity in the config hash and a mismatched db fails closed (re-embed/reset to proceed)
   store.ts              # SQLite + sqlite-vec, schema migrations, dimension validation
   cluster.ts            # cosine similarity, BFS clustering, duplicate detection; scoreClusterItem() shared scorer
   canonical.ts          # selectCanonical()/decideCanonical() source-of-truth pick (merged preferred) + contested; selectTracker() original-bug + fix/duplicate candidates

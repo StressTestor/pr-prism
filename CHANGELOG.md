@@ -5,8 +5,13 @@ all notable changes to pr-prism are documented here.
 ## [unreleased]
 
 ### added
+- OpenAI-compatible endpoint support (#17, PR #18 by @alteixeira20): optional `EMBEDDING_BASE_URL` / `LLM_BASE_URL` route the generic `openai` provider at any compatible service (featherless.ai tested), with URL validation (http/https only, credentials/query/fragment rejected), explicit `EMBEDDING_DIMENSIONS` for unknown models, response-index and vector validation, API-key redaction in provider errors, endpoint fingerprints instead of raw URLs in hashes and db names, a real embedding probe in `doctor`/`init`, and `benchmark --provider/--base-url/--dimensions`
+- provider-selected dimensional reduction gets a distinct versioned vector-space identity in the embedding config hash; legacy local truncation and native output keep their established hashes
 - deterministic PR/issue relational classification via github closing edges (#20): the scan now fetches `closingIssuesReferences` per PR, and every cluster gets a `relation` label (`pr-issue-linked` / `pr-issue-unlinked` / `prs-only` / `issues-only`) plus resolved in-cluster `closingEdges`. flows into the starmap JSON (additive, schema stays v1), `dupes --json` NDJSON rows, `dupes --cluster` detail, and the report's verbose cluster section. `relation` is omitted for clusters holding pre-upgrade rows (unknown, never guessed)
 - scan now refreshes metadata for unchanged items (ciStatus, reviewCount, labels, closesIssues) without re-embedding, so drifting signals stay current and existing dbs pick up closing refs on the next scan
+
+### changed
+- scan now fails closed when the embedding configuration changes while the db still holds vectors from the previous space (was a warning that let mixed vector spaces accumulate). remedy: `prism re-embed` or `prism reset`
 
 ## [3.0.2] — 2026-07-15
 
