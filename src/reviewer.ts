@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { classifyHttpError, ProviderError } from "./errors.js";
+import { classifyFetchError, classifyHttpError, ProviderError } from "./errors.js";
+import { normalizeHttpBaseUrl } from "./provider-url.js";
 import type { LLMProvider, ReviewResult } from "./types.js";
 
 const ReviewResultSchema = z.object({
@@ -9,10 +10,11 @@ const ReviewResultSchema = z.object({
   confidence: z.number().min(0).max(1),
 });
 
-interface LLMConfig {
+export interface LLMConfig {
   provider: string;
   apiKey?: string;
   model: string;
+  baseUrl?: string;
 }
 
 class OpenAILLM implements LLMProvider {
@@ -20,11 +22,11 @@ class OpenAILLM implements LLMProvider {
   private model: string;
   private baseUrl: string;
 
-  constructor(config: LLMConfig & { baseUrl?: string }) {
+  constructor(config: LLMConfig) {
     if (!config.apiKey) throw new Error("LLM_API_KEY required");
     this.apiKey = config.apiKey;
     this.model = config.model;
-    this.baseUrl = config.baseUrl || "https://api.openai.com/v1";
+    this.baseUrl = normalizeHttpBaseUrl(config.baseUrl || "https://api.openai.com/v1");
   }
 
   async complete(prompt: string, systemPrompt?: string): Promise<string> {
@@ -32,17 +34,25 @@ class OpenAILLM implements LLMProvider {
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
     messages.push({ role: "user", content: prompt });
 
-    const resp = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({ model: this.model, messages, temperature: 0.3 }),
-    });
+    let resp: Response;
+    try {
+      resp = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({ model: this.model, messages, temperature: 0.3 }),
+      });
+    } catch (error) {
+      throw classifyFetchError("LLM", error, { apiKeyEnvVar: "LLM_API_KEY", secrets: [this.apiKey] });
+    }
     if (!resp.ok) {
       const body = await resp.text();
-      throw classifyHttpError("LLM", resp.status, body, { apiKeyEnvVar: "LLM_API_KEY" });
+      throw classifyHttpError("LLM", resp.status, body, {
+        apiKeyEnvVar: "LLM_API_KEY",
+        secrets: [this.apiKey],
+      });
     }
     const data = (await resp.json()) as any;
     if (!data.choices?.length) {
@@ -60,22 +70,30 @@ class OpenAILLM implements LLMProvider {
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
     messages.push({ role: "user", content: prompt });
 
-    const resp = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        temperature: 0.3,
-        response_format: { type: "json_object" },
-      }),
-    });
+    let resp: Response;
+    try {
+      resp = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages,
+          temperature: 0.3,
+          response_format: { type: "json_object" },
+        }),
+      });
+    } catch (error) {
+      throw classifyFetchError("LLM", error, { apiKeyEnvVar: "LLM_API_KEY", secrets: [this.apiKey] });
+    }
     if (!resp.ok) {
       const body = await resp.text();
-      throw classifyHttpError("LLM", resp.status, body, { apiKeyEnvVar: "LLM_API_KEY" });
+      throw classifyHttpError("LLM", resp.status, body, {
+        apiKeyEnvVar: "LLM_API_KEY",
+        secrets: [this.apiKey],
+      });
     }
     const data = (await resp.json()) as any;
     if (!data.choices?.length) {

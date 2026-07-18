@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { EMBEDDING_TEXT_VERSION, embeddingConfigHash, prepareEmbeddingText } from "../embeddings.js";
+import {
+  EMBEDDING_TEXT_VERSION,
+  effectiveEmbeddingConfigHash,
+  embeddingConfigHash,
+  embeddingVectorGeneration,
+  prepareEmbeddingText,
+} from "../embeddings.js";
 
 describe("prepareEmbeddingText", () => {
   it("formats title and body without a type prefix", () => {
@@ -44,5 +50,105 @@ describe("embeddingConfigHash", () => {
 
   it("stays stable for the same provider/model/dims/version", () => {
     expect(embeddingConfigHash("jina", "jina-v3", 1024)).toBe(embeddingConfigHash("jina", "jina-v3", 1024));
+  });
+
+  it("preserves the legacy hash format without a custom URL", () => {
+    expect(embeddingConfigHash("openai", "text-embedding-3-small", 1536)).toBe(
+      `openai:text-embedding-3-small:1536:t${EMBEDDING_TEXT_VERSION}`,
+    );
+  });
+
+  it("normalizes trailing slashes in custom endpoint fingerprints", () => {
+    expect(embeddingConfigHash("openai", "custom", 1024, "https://example.com/v1/")).toBe(
+      embeddingConfigHash("openai", "custom", 1024, "https://example.com/v1///"),
+    );
+  });
+
+  it("distinguishes endpoint origins and paths", () => {
+    const first = embeddingConfigHash("openai", "custom", 1024, "https://one.example/v1");
+    expect(first).not.toBe(embeddingConfigHash("openai", "custom", 1024, "https://two.example/v1"));
+    expect(first).not.toBe(embeddingConfigHash("openai", "custom", 1024, "https://one.example/v2"));
+  });
+
+  it("does not include raw endpoints, credentials, queries, or fragments", () => {
+    const hash = embeddingConfigHash(
+      "openai",
+      "custom",
+      1024,
+      "https://user:password@example.com/v1?api_key=secret#private",
+    );
+    expect(hash).not.toContain("example.com");
+    expect(hash).not.toContain("password");
+    expect(hash).not.toContain("api_key");
+    expect(hash).not.toContain("private");
+    expect(hash).toBe(embeddingConfigHash("openai", "custom", 1024, "https://example.com/v1"));
+  });
+
+  it("distinguishes legacy local truncation from provider-selected OpenAI dimensions", () => {
+    const legacyLocalTruncation = embeddingConfigHash(
+      "openai",
+      "text-embedding-3-small",
+      512,
+      undefined,
+      "local-truncation-v1",
+    );
+    const providerSelected = effectiveEmbeddingConfigHash(
+      { provider: "openai", model: "text-embedding-3-small", dimensions: 512 },
+      512,
+    );
+
+    expect(legacyLocalTruncation).toBe(`openai:text-embedding-3-small:512:t${EMBEDDING_TEXT_VERSION}`);
+    expect(providerSelected).not.toBe(legacyLocalTruncation);
+    expect(providerSelected).toContain(":vprovider-selected-v1");
+  });
+
+  it("preserves native OpenAI and fixed ada-002 hashes", () => {
+    const nativeSmall = effectiveEmbeddingConfigHash({ provider: "openai", model: "text-embedding-3-small" }, 1536);
+    const explicitAda = effectiveEmbeddingConfigHash(
+      { provider: "openai", model: "text-embedding-ada-002", dimensions: 1536 },
+      1536,
+    );
+
+    expect(nativeSmall).toBe(`openai:text-embedding-3-small:1536:t${EMBEDDING_TEXT_VERSION}`);
+    expect(explicitAda).toBe(`openai:text-embedding-ada-002:1536:t${EMBEDDING_TEXT_VERSION}`);
+  });
+
+  it("represents native, provider-selected, and local-truncation generation strategies", () => {
+    expect(embeddingVectorGeneration("openai", "text-embedding-3-small")).toBe("native");
+    expect(embeddingVectorGeneration("openai", "custom", 1024)).toBe("provider-selected-v1");
+    expect(embeddingVectorGeneration("jina", "jina-v3", 512)).toBe("local-truncation-v1");
+  });
+
+  it("combines private endpoint and provider-selection identities", () => {
+    const first = effectiveEmbeddingConfigHash(
+      {
+        provider: "openai",
+        model: "custom",
+        dimensions: 1024,
+        baseUrl: "https://user:password@one.example/v1/?key=secret#private",
+      },
+      1024,
+    );
+    const equivalent = effectiveEmbeddingConfigHash(
+      { provider: "openai", model: "custom", dimensions: 1024, baseUrl: "https://one.example/v1" },
+      1024,
+    );
+    const differentEndpoint = effectiveEmbeddingConfigHash(
+      { provider: "openai", model: "custom", dimensions: 1024, baseUrl: "https://two.example/v1" },
+      1024,
+    );
+    const nativeStrategy = embeddingConfigHash("openai", "custom", 1024, "https://one.example/v1", "native");
+
+    expect(first).toBe(equivalent);
+    expect(first).not.toBe(differentEndpoint);
+    expect(first).not.toBe(nativeStrategy);
+    expect(first).toContain(":vprovider-selected-v1");
+    expect(first).not.toMatch(/one\.example|user|password|secret|private/);
+  });
+
+  it("preserves unaffected provider hashes when dimensions are locally truncated", () => {
+    expect(effectiveEmbeddingConfigHash({ provider: "jina", model: "jina-v3", dimensions: 512 }, 512)).toBe(
+      embeddingConfigHash("jina", "jina-v3", 512),
+    );
   });
 });

@@ -5,9 +5,10 @@ import chalk from "chalk";
 import Table from "cli-table3";
 import ora from "ora";
 import { findDuplicateClusters } from "./cluster.js";
-import { getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
-import { createEmbeddingProvider, prepareEmbeddingText } from "./embeddings.js";
+import { type EnvConfig, getRepos, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
+import { createEmbeddingProvider, type ProviderConfig, prepareEmbeddingText } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
+import { endpointFingerprint, normalizeHttpBaseUrl } from "./provider-url.js";
 import { VectorStore } from "./store.js";
 import type { PRItem, StoreItem } from "./types.js";
 
@@ -27,7 +28,9 @@ export interface OverlapResult {
 
 export interface ModelResult {
   model: string;
+  provider: string;
   dimensions: number;
+  endpointFingerprint?: string;
   embedTimeMs: number;
   itemsPerMinute: number;
   clustersByThreshold: Record<string, number>;
@@ -35,10 +38,71 @@ export interface ModelResult {
 
 export interface BenchmarkResult {
   repo: string;
+  provider: string;
   models: ModelResult[];
   thresholds: number[];
   overlaps: Array<{ model: string; threshold: number; overlap: OverlapResult }>;
   timestamp: string;
+}
+
+export interface BenchmarkEndpointIdentity {
+  baseUrl?: string;
+  fingerprint?: string;
+}
+
+export function benchmarkDatabasePath(
+  repoFull: string,
+  provider: string,
+  model: string,
+  dimensions: number,
+  endpoint?: BenchmarkEndpointIdentity,
+): string {
+  const slug = repoFull.replace(/[/:.]/g, "-");
+  const providerSlug = provider.replace(/[/:.]/g, "-");
+  const modelSlug = model.replace(/[/:.]/g, "-");
+  const fingerprint = endpoint?.baseUrl ? endpointFingerprint(endpoint.baseUrl) : endpoint?.fingerprint;
+  if (fingerprint && !/^[a-f0-9]{16}$/.test(fingerprint)) {
+    throw new Error("benchmark endpoint fingerprint must be a 16-character lowercase hexadecimal value");
+  }
+  const endpointSuffix = fingerprint ? `-e${fingerprint}` : "";
+  return resolve(
+    process.cwd(),
+    "data",
+    `benchmark-${slug}-${providerSlug}-${modelSlug}-${dimensions}d${endpointSuffix}.db`,
+  );
+}
+
+export function parseBenchmarkDimensions(value: string): number {
+  const dimensions = Number(value);
+  if (!Number.isInteger(dimensions) || dimensions <= 0) {
+    throw new Error("benchmark dimensions must be a positive integer");
+  }
+  return dimensions;
+}
+
+export function resolveBenchmarkProviderConfig(
+  opts: Pick<BenchmarkOptions, "provider" | "baseUrl" | "dimensions">,
+  env: Pick<EnvConfig, "EMBEDDING_API_KEY" | "EMBEDDING_BASE_URL" | "EMBEDDING_DIMENSIONS">,
+): Omit<ProviderConfig, "model"> {
+  const provider = opts.provider || "ollama";
+  const inheritOpenAIEnvironment = opts.provider === "openai";
+  const configuredBaseUrl = opts.baseUrl ?? (inheritOpenAIEnvironment ? env.EMBEDDING_BASE_URL : undefined);
+  const configuredDimensions = opts.dimensions ?? (inheritOpenAIEnvironment ? env.EMBEDDING_DIMENSIONS : undefined);
+  return {
+    provider,
+    apiKey: provider === "ollama" ? undefined : env.EMBEDDING_API_KEY,
+    baseUrl: configuredBaseUrl ? normalizeHttpBaseUrl(configuredBaseUrl) : undefined,
+    dimensions: configuredDimensions === undefined ? undefined : parseBenchmarkDimensions(String(configuredDimensions)),
+  };
+}
+
+export async function ensureBenchmarkModels(
+  provider: string,
+  models: string[],
+  ensureModel: (model: string) => Promise<void> = ensureOllamaModel,
+): Promise<void> {
+  if (provider !== "ollama") return;
+  for (const model of models) await ensureModel(model);
 }
 
 // ── cluster overlap ──────────────────────────────────────────────
@@ -157,114 +221,131 @@ export async function ensureOllamaModel(model: string): Promise<void> {
 
 // ── per-model benchmark run ──────────────────────────────────────
 
-async function runBenchmarkForModel(
+export async function runBenchmarkForModel(
   model: string,
   repoFull: string,
   thresholds: number[],
   allItems: PRItem[],
+  providerConfig: Omit<ProviderConfig, "model">,
 ): Promise<ModelResult> {
-  const slug = repoFull.replace(/[/:.]/g, "-");
-  const dbPath = resolve(process.cwd(), "data", `benchmark-${slug}-${model.replace(/[/:.]/g, "-")}.db`);
-
   const spinner = ora(`[${model}] creating embedder`).start();
+  let store: VectorStore | undefined;
+  try {
+    const embedder = await createEmbeddingProvider({ ...providerConfig, model });
+    const dimensions = embedder.dimensions;
+    const endpointId = providerConfig.baseUrl ? endpointFingerprint(providerConfig.baseUrl) : undefined;
+    const dbPath = benchmarkDatabasePath(repoFull, providerConfig.provider, model, dimensions, {
+      fingerprint: endpointId,
+    });
+    store = new VectorStore(dbPath, dimensions, model);
 
-  const embedder = await createEmbeddingProvider({ provider: "ollama", model });
-  const dimensions = embedder.dimensions;
-  const store = new VectorStore(dbPath, dimensions, model);
+    if (allItems.length === 0) {
+      spinner.warn(`[${model}] no items found in ${repoFull}`);
+      return {
+        model,
+        provider: providerConfig.provider,
+        dimensions,
+        endpointFingerprint: endpointId,
+        embedTimeMs: 0,
+        itemsPerMinute: 0,
+        clustersByThreshold: Object.fromEntries(thresholds.map((t) => [t.toString(), 0])),
+      };
+    }
 
-  if (allItems.length === 0) {
-    spinner.warn(`[${model}] no items found in ${repoFull}`);
-    store.close();
-    return {
-      model,
-      dimensions,
-      embedTimeMs: 0,
-      itemsPerMinute: 0,
-      clustersByThreshold: Object.fromEntries(thresholds.map((t) => [t.toString(), 0])),
-    };
-  }
+    // embed in batches
+    spinner.text = `[${model}] embedding ${allItems.length} items`;
+    const batchSize = 50;
+    const startTime = Date.now();
 
-  // embed in batches
-  spinner.text = `[${model}] embedding ${allItems.length} items`;
-  const batchSize = 50;
-  const startTime = Date.now();
+    let zeroVectors = 0;
 
-  let zeroVectors = 0;
+    for (let i = 0; i < allItems.length; i += batchSize) {
+      const batch = allItems.slice(i, i + batchSize);
+      const texts = batch.map((item) => prepareEmbeddingText(item));
 
-  for (let i = 0; i < allItems.length; i += batchSize) {
-    const batch = allItems.slice(i, i + batchSize);
-    const texts = batch.map((item) => prepareEmbeddingText(item));
+      let embeddings: number[][];
+      try {
+        embeddings = await embedder.embedBatch(texts);
+      } catch (error) {
+        if (providerConfig.provider !== "ollama") throw error;
 
-    let embeddings: number[][];
-    try {
-      embeddings = await embedder.embedBatch(texts);
-    } catch {
-      // Batch failed (context length, etc.) — try individually with truncated text
-      embeddings = [];
-      for (const text of texts) {
-        try {
-          // Truncate to ~500 chars to fit small context models like all-minilm
-          const truncated = text.slice(0, 500);
-          const [single] = await embedder.embedBatch([truncated]);
-          embeddings.push(single);
-        } catch {
-          embeddings.push(new Array(embedder.dimensions).fill(0));
-          zeroVectors++;
+        // Preserve the legacy Ollama recovery for models with small context windows.
+        embeddings = [];
+        for (const text of texts) {
+          try {
+            const truncated = text.slice(0, 500);
+            const [single] = await embedder.embedBatch([truncated]);
+            embeddings.push(single);
+          } catch {
+            embeddings.push(new Array(embedder.dimensions).fill(0));
+            zeroVectors++;
+          }
         }
       }
+
+      for (let j = 0; j < batch.length; j++) {
+        const item = batch[j];
+        const id = `${item.repo}:${item.type}:${item.number}`;
+        const storeItem: StoreItem = {
+          id,
+          type: item.type,
+          number: item.number,
+          repo: item.repo,
+          title: item.title,
+          bodySnippet: (item.body || "").slice(0, 500),
+          embedding: new Float32Array(embeddings[j]),
+          metadata: {
+            author: item.author,
+            state: item.state,
+            labels: item.labels,
+            additions: item.additions,
+            deletions: item.deletions,
+            changedFiles: item.changedFiles,
+            ciStatus: item.ciStatus,
+            reviewCount: item.reviewCount,
+            hasTests: item.hasTests,
+          },
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        };
+        store.upsert(storeItem);
+      }
+
+      spinner.text = `[${model}] embedded ${Math.min(i + batchSize, allItems.length)}/${allItems.length}`;
     }
 
-    for (let j = 0; j < batch.length; j++) {
-      const item = batch[j];
-      const id = `${item.repo}:${item.type}:${item.number}`;
-      const storeItem: StoreItem = {
-        id,
-        type: item.type,
-        number: item.number,
-        repo: item.repo,
-        title: item.title,
-        bodySnippet: (item.body || "").slice(0, 500),
-        embedding: new Float32Array(embeddings[j]),
-        metadata: {
-          author: item.author,
-          state: item.state,
-          labels: item.labels,
-          additions: item.additions,
-          deletions: item.deletions,
-          changedFiles: item.changedFiles,
-          ciStatus: item.ciStatus,
-          reviewCount: item.reviewCount,
-          hasTests: item.hasTests,
-        },
-        createdAt: item.createdAt,
-        updatedAt: item.updatedAt,
-      };
-      store.upsert(storeItem);
+    const embedTimeMs = Date.now() - startTime;
+    const itemsPerMinute = Math.round((allItems.length / (embedTimeMs / 1000)) * 60);
+
+    if (zeroVectors > 0) {
+      console.warn(chalk.yellow(`  warning: ${zeroVectors} items failed to embed (zero vectors)`));
     }
 
-    spinner.text = `[${model}] embedded ${Math.min(i + batchSize, allItems.length)}/${allItems.length}`;
+    spinner.text = `[${model}] clustering`;
+    const clustersByThreshold: Record<string, number> = {};
+
+    for (const threshold of thresholds) {
+      const clusters = findDuplicateClusters(store, allItems, { threshold, repo: repoFull });
+      clustersByThreshold[threshold.toString()] = clusters.length;
+    }
+
+    spinner.succeed(`[${model}] done — ${allItems.length} items, ${dimensions} dims, ${embedTimeMs}ms`);
+
+    return {
+      model,
+      provider: providerConfig.provider,
+      dimensions,
+      endpointFingerprint: endpointId,
+      embedTimeMs,
+      itemsPerMinute,
+      clustersByThreshold,
+    };
+  } catch (error) {
+    spinner.fail(`[${model}] benchmark failed`);
+    throw error;
+  } finally {
+    store?.close();
   }
-
-  const embedTimeMs = Date.now() - startTime;
-  const itemsPerMinute = Math.round((allItems.length / (embedTimeMs / 1000)) * 60);
-
-  if (zeroVectors > 0) {
-    console.warn(chalk.yellow(`  warning: ${zeroVectors} items failed to embed (zero vectors)`));
-  }
-
-  // cluster at each threshold
-  spinner.text = `[${model}] clustering`;
-  const clustersByThreshold: Record<string, number> = {};
-
-  for (const threshold of thresholds) {
-    const clusters = findDuplicateClusters(store, allItems, { threshold, repo: repoFull });
-    clustersByThreshold[threshold.toString()] = clusters.length;
-  }
-
-  store.close();
-  spinner.succeed(`[${model}] done — ${allItems.length} items, ${dimensions} dims, ${embedTimeMs}ms`);
-
-  return { model, dimensions, embedTimeMs, itemsPerMinute, clustersByThreshold };
 }
 
 // ── main benchmark runner ────────────────────────────────────────
@@ -274,6 +355,9 @@ export interface BenchmarkOptions {
   models: string;
   thresholds?: string;
   configPath?: string;
+  provider?: string;
+  baseUrl?: string;
+  dimensions?: number;
 }
 
 export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
@@ -307,15 +391,16 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
   }
 
   const env = loadEnvConfig();
+  const providerConfig = resolveBenchmarkProviderConfig(opts, env);
+  const provider = providerConfig.provider;
 
   console.log(chalk.bold(`\nbenchmark: ${repoFull}`));
+  console.log(`provider: ${provider}`);
   console.log(`models: ${models.join(", ")}`);
   console.log(`thresholds: ${thresholds.join(", ")}\n`);
 
-  // ensure all models are available
-  for (const model of models) {
-    await ensureOllamaModel(model);
-  }
+  // Ollama retains its local availability checks and automatic pulls.
+  await ensureBenchmarkModels(provider, models);
 
   // fetch items once (shared across all models)
   const { owner, repo } = parseRepo(repoFull);
@@ -347,7 +432,7 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
   // run benchmark for each model
   const results: ModelResult[] = [];
   for (const model of models) {
-    const result = await runBenchmarkForModel(model, repoFull, thresholds, allItems);
+    const result = await runBenchmarkForModel(model, repoFull, thresholds, allItems, providerConfig);
     results.push(result);
   }
 
@@ -384,15 +469,12 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
   // ── overlap: each model vs baseline (first model) ───────────
   const baseline = results[0];
   const allOverlaps: Array<{ model: string; threshold: number; overlap: OverlapResult }> = [];
-  const repoSlug = repoFull.replace(/[/:.]/g, "-");
 
   // Load baseline clusters once per threshold
   for (const t of thresholds) {
-    const baseDbPath = resolve(
-      process.cwd(),
-      "data",
-      `benchmark-${repoSlug}-${baseline.model.replace(/[/:.]/g, "-")}.db`,
-    );
+    const baseDbPath = benchmarkDatabasePath(repoFull, baseline.provider, baseline.model, baseline.dimensions, {
+      fingerprint: baseline.endpointFingerprint,
+    });
     const baseStore = new VectorStore(baseDbPath);
     const baseItems = baseStore.getAllItems(repoFull) as unknown as PRItem[];
     const baseClusters = findDuplicateClusters(baseStore, baseItems, { threshold: t, repo: repoFull });
@@ -404,7 +486,9 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
 
     for (let ri = 1; ri < results.length; ri++) {
       const r = results[ri];
-      const dbPath = resolve(process.cwd(), "data", `benchmark-${repoSlug}-${r.model.replace(/[/:.]/g, "-")}.db`);
+      const dbPath = benchmarkDatabasePath(repoFull, r.provider, r.model, r.dimensions, {
+        fingerprint: r.endpointFingerprint,
+      });
       const store = new VectorStore(dbPath);
       const items = store.getAllItems(repoFull) as unknown as PRItem[];
       const clusters = findDuplicateClusters(store, items, { threshold: t, repo: repoFull });
@@ -442,6 +526,7 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
   // ── save results ─────────────────────────────────────────────
   const benchmarkResult: BenchmarkResult = {
     repo: repoFull,
+    provider,
     models: results,
     thresholds,
     overlaps: allOverlaps,

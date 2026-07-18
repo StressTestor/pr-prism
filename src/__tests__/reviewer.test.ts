@@ -121,4 +121,104 @@ describe("reviewPR", () => {
     // The diff in the prompt should be capped, not the full 60k
     expect(capturedBody.length).toBeLessThan(60_000);
   });
+
+  it("uses a normalized generic OpenAI-compatible endpoint and the separate LLM API key", async () => {
+    let capturedUrl = "";
+    let capturedAuthorization = "";
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: any) => {
+      capturedUrl = url;
+      capturedAuthorization = init.headers.Authorization;
+      return {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(VALID_REVIEW) } }] }),
+        text: () => Promise.resolve(""),
+      };
+    });
+
+    const { reviewPR } = await import("../reviewer.js");
+    await reviewPR("Synthetic", "Description", "diff", {
+      provider: "openai",
+      apiKey: "llm-only-key",
+      model: "provider/model",
+      baseUrl: "https://compatible.example/v1///",
+    });
+
+    expect(capturedUrl).toBe("https://compatible.example/v1/chat/completions");
+    expect(capturedAuthorization).toBe("Bearer llm-only-key");
+  });
+
+  it("uses the default OpenAI chat completions endpoint", async () => {
+    let capturedUrl = "";
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      capturedUrl = url;
+      return {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(VALID_REVIEW) } }] }),
+        text: () => Promise.resolve(""),
+      };
+    });
+    const { reviewPR } = await import("../reviewer.js");
+    await reviewPR("Synthetic", "Description", "diff", DEFAULT_CONFIG);
+    expect(capturedUrl).toBe("https://api.openai.com/v1/chat/completions");
+  });
+
+  it.each([
+    ["kimi", "https://api.moonshot.cn/v1/chat/completions", "Bearer provider-key"],
+    ["opencode", "https://opencode.ai/zen/v1/chat/completions", "Bearer provider-key"],
+    ["ollama", "http://localhost:11434/v1/chat/completions", "Bearer ollama"],
+  ])("keeps the %s endpoint unchanged", async (provider, expectedUrl, expectedAuthorization) => {
+    let capturedUrl = "";
+    let capturedAuthorization = "";
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: any) => {
+      capturedUrl = url;
+      capturedAuthorization = init.headers.Authorization;
+      return {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(VALID_REVIEW) } }] }),
+        text: () => Promise.resolve(""),
+      };
+    });
+    const { reviewPR } = await import("../reviewer.js");
+    await reviewPR("Synthetic", "Description", "diff", {
+      provider,
+      apiKey: "provider-key",
+      model: "provider-model",
+      baseUrl: "https://ignored.example/v1",
+    });
+    expect(capturedUrl).toBe(expectedUrl);
+    expect(capturedAuthorization).toBe(expectedAuthorization);
+  });
+
+  it("keeps Anthropic request behavior unchanged", async () => {
+    let capturedUrl = "";
+    let capturedKey = "";
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init: any) => {
+      capturedUrl = url;
+      capturedKey = init.headers["x-api-key"];
+      return {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ content: [{ text: JSON.stringify(VALID_REVIEW) }] }),
+        text: () => Promise.resolve(""),
+      };
+    });
+    const { reviewPR } = await import("../reviewer.js");
+    await reviewPR("Synthetic", "Description", "diff", {
+      provider: "anthropic",
+      apiKey: "anthropic-key",
+      model: "claude-test",
+      baseUrl: "https://ignored.example/v1",
+    });
+    expect(capturedUrl).toBe("https://api.anthropic.com/v1/messages");
+    expect(capturedKey).toBe("anthropic-key");
+  });
+
+  it("classifies generic OpenAI connection failures as ProviderError", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(Object.assign(new Error("connect failed"), { code: "ECONNREFUSED" }));
+    const { reviewPR } = await import("../reviewer.js");
+    await expect(reviewPR("Synthetic", "Description", "diff", DEFAULT_CONFIG)).rejects.toBeInstanceOf(ProviderError);
+  });
 });

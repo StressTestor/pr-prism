@@ -5,6 +5,8 @@
 
 import { execFileSync } from "node:child_process";
 import { parseRepo } from "./config.js";
+import { checkEmbeddingReachability } from "./doctor.js";
+import type { ProviderConfig } from "./embeddings.js";
 
 /** Runs `git remote get-url origin` in cwd; injectable for tests. */
 export type GitRunner = (cwd: string) => string;
@@ -102,6 +104,15 @@ export interface VerifyInitDeps {
   network: boolean;
   fetchSample?: () => Promise<unknown>;
   checkEmbedding?: () => Promise<boolean>;
+}
+
+/** Perform the same real, single-probe embedding reachability check used by doctor. */
+export async function verifyInitEmbedding(config: ProviderConfig): Promise<boolean> {
+  const check = await checkEmbeddingReachability(config);
+  if (check.status === "fail") {
+    throw new Error(check.detail || "embedding provider is unreachable");
+  }
+  return true;
 }
 
 /** Lightweight post-init health check (mirrors doctor checks 1-4), injectable for tests. */

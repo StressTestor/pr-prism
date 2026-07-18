@@ -4,6 +4,7 @@ import { config as loadEnv } from "dotenv";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { formatZodError } from "./errors.js";
+import { normalizeHttpBaseUrl } from "./provider-url.js";
 
 const ScoringWeightsSchema = z.object({
   has_tests: z.number().default(0.25),
@@ -56,10 +57,40 @@ const EnvSchema = z.object({
   EMBEDDING_PROVIDER: z.enum(["openai", "kimi", "ollama", "voyageai", "jina"]).default("openai"),
   EMBEDDING_API_KEY: z.string().optional(),
   EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
-  EMBEDDING_DIMENSIONS: z.coerce.number().optional(),
+  EMBEDDING_BASE_URL: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined) return undefined;
+      try {
+        return normalizeHttpBaseUrl(value);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : "must be a valid HTTP(S) URL",
+        });
+        return z.NEVER;
+      }
+    }),
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().optional(),
   LLM_PROVIDER: z.enum(["openai", "kimi", "anthropic", "ollama", "opencode"]).default("openai"),
   LLM_API_KEY: z.string().optional(),
   LLM_MODEL: z.string().default("gpt-4o-mini"),
+  LLM_BASE_URL: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined) return undefined;
+      try {
+        return normalizeHttpBaseUrl(value);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : "must be a valid HTTP(S) URL",
+        });
+        return z.NEVER;
+      }
+    }),
 });
 
 export type EnvConfig = z.infer<typeof EnvSchema>;
@@ -111,7 +142,7 @@ export function getVisionDoc(config: PrismConfig, repo: string): string | undefi
 }
 
 export function loadEnvConfig(envPath?: string): EnvConfig {
-  loadEnv({ path: envPath || resolve(process.cwd(), ".env") });
+  loadEnv({ path: envPath || resolve(process.cwd(), ".env"), quiet: true });
   try {
     return EnvSchema.parse(process.env);
   } catch (e: any) {

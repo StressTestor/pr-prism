@@ -5,7 +5,12 @@ import Table from "cli-table3";
 import ora from "ora";
 import { findDuplicateClusters } from "./cluster.js";
 import { getRepos, getVisionDoc, loadConfig, loadEnvConfig, parseRepo } from "./config.js";
-import { createEmbeddingProvider, embeddingConfigHash, prepareEmbeddingText } from "./embeddings.js";
+import {
+  createEmbeddingProvider,
+  effectiveEmbeddingConfigHash,
+  type ProviderConfig,
+  prepareEmbeddingText,
+} from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { applyLabelActions, ensureLabelsExist, type LabelAction } from "./labels.js";
 import { classifyClusterRelation } from "./relations.js";
@@ -57,36 +62,47 @@ export async function createPipelineContext(repoOverride?: string): Promise<Pipe
     provider: env.EMBEDDING_PROVIDER,
     apiKey: env.EMBEDDING_API_KEY,
     model: env.EMBEDDING_MODEL,
+    baseUrl: env.EMBEDDING_BASE_URL,
+    dimensions: env.EMBEDDING_DIMENSIONS,
   });
-  // Matryoshka dimension truncation
-  const targetDims = env.EMBEDDING_DIMENSIONS;
-  if (targetDims && targetDims > embedder.dimensions) {
-    throw new Error(
-      `EMBEDDING_DIMENSIONS (${targetDims}) exceeds model's native dimensions (${embedder.dimensions}). ` +
-        `use a value <= ${embedder.dimensions} or remove EMBEDDING_DIMENSIONS.`,
+  const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL);
+  return { config, env, owner, repo, repoFull, github, store, embedder };
+}
+
+export async function reEmbedStoredItems(
+  store: VectorStore,
+  items: StoreItem[],
+  embedder: EmbeddingProvider,
+  providerConfig: Pick<ProviderConfig, "provider" | "model" | "baseUrl" | "dimensions">,
+  batchSize: number,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  store.dropVecItems();
+  store.initVecItems();
+
+  let done = 0;
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const texts = batch.map((item) =>
+      prepareEmbeddingText({
+        title: item.title,
+        body: item.bodySnippet,
+        type: item.type,
+      }),
     );
+    const embeddings = await embedder.embedBatch(texts);
+    for (let j = 0; j < batch.length; j++) {
+      store.upsertEmbeddingOnly(batch[j].id, new Float32Array(embeddings[j]));
+    }
+    done += batch.length;
+    onProgress?.(done, items.length);
   }
-  const effectiveDims = targetDims || embedder.dimensions;
 
-  // Wrap embedder to truncate if needed
-  const wrappedEmbedder =
-    targetDims && targetDims < embedder.dimensions
-      ? {
-          dimensions: targetDims,
-          embed: async (text: string) => {
-            const full = await embedder.embed(text);
-            return full.slice(0, targetDims);
-          },
-          embedBatch: async (texts: string[]) => {
-            const full = await embedder.embedBatch(texts);
-            return full.map((v) => v.slice(0, targetDims));
-          },
-          init: () => Promise.resolve(),
-        }
-      : embedder;
-
-  const store = new VectorStore(undefined, effectiveDims, env.EMBEDDING_MODEL);
-  return { config, env, owner, repo, repoFull, github, store, embedder: wrappedEmbedder as EmbeddingProvider };
+  store.setMeta("embedding_model", providerConfig.model);
+  store.setMeta("embedding_dimensions", String(embedder.dimensions));
+  store.setMeta("embedding_provider", providerConfig.provider);
+  store.setMeta("embedding_config_hash", effectiveEmbeddingConfigHash(providerConfig, embedder.dimensions));
+  store.setMeta("schema_version", "1");
 }
 
 /** Single source for an item's stored metadata: used for both new-item upserts
@@ -217,14 +233,21 @@ export async function runScan(
 
   // Store/update embedding metadata on every scan. The hash includes the
   // embed-text format version, so changing prepareEmbeddingText trips the warning.
-  const configHash = embeddingConfigHash(env.EMBEDDING_PROVIDER, env.EMBEDDING_MODEL, embedder.dimensions);
+  const configHash = effectiveEmbeddingConfigHash(
+    {
+      provider: env.EMBEDDING_PROVIDER,
+      model: env.EMBEDDING_MODEL,
+      baseUrl: env.EMBEDDING_BASE_URL,
+      dimensions: env.EMBEDDING_DIMENSIONS,
+    },
+    embedder.dimensions,
+  );
   const storedHash = store.getMeta("embedding_config_hash");
-  if (storedHash && storedHash !== configHash && newItems.length > 0) {
-    console.log(
-      chalk.yellow(
-        `  warning: embedding config changed (was ${storedHash}, now ${configHash}). ` +
-          "run `prism scan --reset-embeddings` or `prism reset` if results look wrong.",
-      ),
+  if (storedHash && storedHash !== configHash && store.hasEmbeddings()) {
+    throw new Error(
+      `embedding configuration changed (was ${storedHash}, now ${configHash}) while the database still contains ` +
+        "vectors from the previous configuration. Run `prism re-embed` to rebuild all vectors, or `prism reset` " +
+        "to start fresh.",
     );
   }
   store.setMeta("embedding_model", env.EMBEDDING_MODEL);
