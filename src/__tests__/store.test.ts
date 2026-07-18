@@ -240,3 +240,77 @@ describe("VectorStore", () => {
     store.close();
   });
 });
+
+describe("closesIssues metadata round-trip", () => {
+  const dbs: string[] = [];
+
+  afterEach(() => {
+    for (const db of dbs) {
+      try {
+        rmSync(resolve(db, ".."), { recursive: true, force: true });
+      } catch {}
+    }
+    dbs.length = 0;
+  });
+
+  function seeded(path: string, closesIssues?: number[]) {
+    const store = new VectorStore(path, 2, "test-model");
+    store.upsert({
+      id: "owner/repo:pr:10",
+      type: "pr",
+      number: 10,
+      repo: "owner/repo",
+      title: "a pr",
+      bodySnippet: "body",
+      embedding: new Float32Array([1, 0]),
+      metadata: { author: "dev", state: "open", labels: [], ...(closesIssues !== undefined ? { closesIssues } : {}) },
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-02T00:00:00Z",
+    });
+    return store;
+  }
+
+  it("surfaces closesIssues on getAllItems and getAllItemsMulti", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = seeded(path, [7, 8]);
+    expect((store.getAllItems("owner/repo")[0] as any).closesIssues).toEqual([7, 8]);
+    expect((store.getAllItemsMulti(["owner/repo", "owner/other"])[0] as any).closesIssues).toEqual([7, 8]);
+    store.close();
+  });
+
+  it("leaves closesIssues undefined for pre-upgrade rows", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = seeded(path);
+    expect((store.getAllItems("owner/repo")[0] as any).closesIssues).toBeUndefined();
+    store.close();
+  });
+
+  it("refreshMetadata updates metadata without touching the embedding", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = seeded(path);
+    store.refreshMetadata("owner/repo:pr:10", {
+      author: "dev",
+      state: "open",
+      labels: [],
+      ciStatus: "failure",
+      closesIssues: [7],
+    });
+    const item = store.getAllItems("owner/repo")[0] as any;
+    expect(item.closesIssues).toEqual([7]);
+    expect(item.ciStatus).toBe("failure");
+    expect(store.getEmbedding("owner/repo:pr:10")).toEqual(new Float32Array([1, 0]));
+    store.close();
+  });
+
+  it("refreshMetadata on a missing id is a no-op", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = seeded(path);
+    store.refreshMetadata("owner/repo:pr:999", { closesIssues: [1] });
+    expect(store.getAllItems("owner/repo")).toHaveLength(1);
+    store.close();
+  });
+});

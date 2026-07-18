@@ -36,6 +36,7 @@ import {
   runScan,
   runVision,
 } from "./pipeline.js";
+import { classifyClusterRelation } from "./relations.js";
 import { reviewPR } from "./reviewer.js";
 import { escapeTableCell, sanitizeTitle } from "./sanitize.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
@@ -504,7 +505,11 @@ program
           return;
         }
         console.log(chalk.bold(`\nCluster #${cluster.id}: "${sanitizeTitle(cluster.theme)}"`));
-        console.log(`Items: ${cluster.items.length} | Avg similarity: ${(cluster.avgSimilarity * 100).toFixed(1)}%\n`);
+        const clusterRel = classifyClusterRelation(cluster.items);
+        const relSuffix = clusterRel.relation !== undefined ? ` | Relation: ${clusterRel.relation}` : "";
+        console.log(
+          `Items: ${cluster.items.length} | Avg similarity: ${(cluster.avgSimilarity * 100).toFixed(1)}%${relSuffix}\n`,
+        );
         for (const item of cluster.items) {
           const isBest = item.number === cluster.bestPick.number;
           const prefix = isBest ? chalk.green("★") : " ";
@@ -1155,14 +1160,18 @@ program
           repo: repoFull,
           date: now,
           stats,
-          clusters: clusters.slice(0, clusterN).map((c) => ({
-            id: c.id,
-            size: c.items.length,
-            avgSimilarity: c.avgSimilarity,
-            minSimilarity: c.minSimilarity,
-            bestPick: c.bestPick.number,
-            theme: sanitizeTitle(c.theme),
-          })),
+          clusters: clusters.slice(0, clusterN).map((c) => {
+            const rel = classifyClusterRelation(c.items);
+            return {
+              id: c.id,
+              size: c.items.length,
+              avgSimilarity: c.avgSimilarity,
+              minSimilarity: c.minSimilarity,
+              bestPick: c.bestPick.number,
+              theme: sanitizeTitle(c.theme),
+              ...(rel.relation !== undefined ? { relation: rel.relation, closingEdges: rel.closingEdges } : {}),
+            };
+          }),
           ranked: ranked.slice(0, topN).map((pr) => ({
             number: pr.number,
             score: pr.score,
@@ -1229,7 +1238,13 @@ program
         const themeText = escapeTableCell(cluster.theme, 80);
         report += `### cluster ${cluster.id}: ${themeText} (${cluster.items.length} items)\n\n`;
         report += `**source of truth:** [#${source.number}](https://github.com/${repoFull}/${sourceLinkType}/${source.number}) — "${escapeTableCell(source.title, 80)}"\n`;
-        report += `opened: ${source.createdAt.slice(0, 10)} by @${source.author || "unknown"} | quality score: ${source.score.toFixed(2)}\n\n`;
+        report += `opened: ${source.createdAt.slice(0, 10)} by @${source.author || "unknown"} | quality score: ${source.score.toFixed(2)}\n`;
+        const rel = classifyClusterRelation(cluster.items);
+        if (rel.relation !== undefined) {
+          const edges = rel.closingEdges.map((e) => `#${e.pr} closes #${e.issue}`).join(", ");
+          report += `relation: ${rel.relation}${edges ? ` (${edges})` : ""}\n`;
+        }
+        report += `\n`;
 
         const dupes = cluster.items.filter((i) => i.number !== source.number);
         if (dupes.length > 0 && sourceEmb) {

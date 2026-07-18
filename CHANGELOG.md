@@ -2,6 +2,12 @@
 
 all notable changes to pr-prism are documented here.
 
+## [unreleased]
+
+### added
+- deterministic PR/issue relational classification via github closing edges (#20): the scan now fetches `closingIssuesReferences` per PR, and every cluster gets a `relation` label (`pr-issue-linked` / `pr-issue-unlinked` / `prs-only` / `issues-only`) plus resolved in-cluster `closingEdges`. flows into the starmap JSON (additive, schema stays v1), `dupes --json` NDJSON rows, `dupes --cluster` detail, and the report's verbose cluster section. `relation` is omitted for clusters holding pre-upgrade rows (unknown, never guessed)
+- scan now refreshes metadata for unchanged items (ciStatus, reviewCount, labels, closesIssues) without re-embedding, so drifting signals stay current and existing dbs pick up closing refs on the next scan
+
 ## [3.0.2] — 2026-07-15
 
 calibration pass driven by dogfooding a real duplicate cluster (odysseus #5207: bestPick was the closed, CI-failing PR over the merged green fix). two independent fixes so a red build can no longer win.

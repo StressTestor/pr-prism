@@ -13,6 +13,7 @@ import {
 } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { applyLabelActions, ensureLabelsExist, type LabelAction } from "./labels.js";
+import { classifyClusterRelation } from "./relations.js";
 import { escapeTableCell, sanitizeTitle } from "./sanitize.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
 import { cosineSimilarity, isZeroVector } from "./similarity.js";
@@ -104,6 +105,26 @@ export async function reEmbedStoredItems(
   store.setMeta("schema_version", "1");
 }
 
+/** Single source for an item's stored metadata: used for both new-item upserts
+ * and the unchanged-item refresh, so drifting fields can never diverge. */
+function itemMetadata(item: PRItem): Record<string, unknown> {
+  return {
+    author: item.author,
+    state: item.state,
+    labels: item.labels,
+    additions: item.additions,
+    deletions: item.deletions,
+    changedFiles: item.changedFiles,
+    ciStatus: item.ciStatus,
+    reviewCount: item.reviewCount,
+    hasTests: item.hasTests,
+    bodyLength: item.body.length,
+    nodeId: item.nodeId,
+    headRefOid: item.headRefOid,
+    closesIssues: item.closesIssues,
+  };
+}
+
 export async function runScan(
   ctx: PipelineContext,
   opts: { since?: string; state?: string; useRest?: boolean; json?: boolean },
@@ -181,6 +202,13 @@ export async function runScan(
       // Check if embedding actually exists (crash recovery)
       const hasEmbedding = store.getEmbedding(existing.id);
       if (hasEmbedding) {
+        // Unchanged text, but ciStatus/reviewCount/labels/closesIssues drift
+        // without bumping updatedAt — keep them current, skip the embedding.
+        // Write only on drift so a quiet repo costs zero UPDATEs per scan.
+        const fresh = itemMetadata(item);
+        if (JSON.stringify(fresh) !== JSON.stringify(existing.metadata)) {
+          store.refreshMetadata(existing.id, fresh);
+        }
         skipped++;
       } else {
         recovered++;
@@ -289,20 +317,7 @@ export async function runScan(
         title: item.title,
         bodySnippet: item.body.slice(0, 500),
         embedding,
-        metadata: {
-          author: item.author,
-          state: item.state,
-          labels: item.labels,
-          additions: item.additions,
-          deletions: item.deletions,
-          changedFiles: item.changedFiles,
-          ciStatus: item.ciStatus,
-          reviewCount: item.reviewCount,
-          hasTests: item.hasTests,
-          bodyLength: item.body.length,
-          nodeId: item.nodeId,
-          headRefOid: item.headRefOid,
-        },
+        metadata: itemMetadata(item),
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       };
@@ -362,6 +377,7 @@ export async function runDupes(
 
   if (opts.json) {
     for (const c of clusters) {
+      const rel = classifyClusterRelation(c.items);
       console.log(
         JSON.stringify({
           id: c.id,
@@ -370,6 +386,7 @@ export async function runDupes(
           minSimilarity: c.minSimilarity,
           bestPick: c.bestPick.number,
           theme: sanitizeTitle(c.theme),
+          ...(rel.relation !== undefined ? { relation: rel.relation, closingEdges: rel.closingEdges } : {}),
           items: c.items.map((i) => ({
             number: i.number,
             type: i.type,

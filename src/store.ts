@@ -273,9 +273,17 @@ export class VectorStore {
         hasTests: metadata.hasTests,
         nodeId: metadata.nodeId,
         headRefOid: metadata.headRefOid,
+        closesIssues: metadata.closesIssues,
         body: row.body_snippet,
       };
     });
+  }
+
+  /** Metadata-only update for unchanged items: keeps drifting fields (ciStatus,
+   * reviewCount, labels, closesIssues) current without re-embedding. No-op for
+   * unknown ids; never touches vec_items. */
+  refreshMetadata(id: string, metadata: Record<string, unknown>): void {
+    this.db.prepare("UPDATE items SET metadata_json = ? WHERE id = ?").run(JSON.stringify(metadata), id);
   }
 
   getEmbedding(id: string): Float32Array | undefined {
@@ -329,6 +337,7 @@ export class VectorStore {
         hasTests: metadata.hasTests,
         nodeId: metadata.nodeId,
         headRefOid: metadata.headRefOid,
+        closesIssues: metadata.closesIssues,
         body: row.body_snippet,
       } as StoreItem;
     });

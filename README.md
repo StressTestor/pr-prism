@@ -207,6 +207,16 @@ visualizers (schema v1, additive-only evolution): clusters with confidence tiers
 contested + runner-up, tracker, item state (open/closed/merged), embedding
 metadata, and github node ids as a join key.
 
+clusters also carry a deterministic `relation` label built from github's closing
+edges: `pr-issue-linked` (a member PR closes a member issue, resolved pairs in
+`closingEdges`), `pr-issue-unlinked`, `prs-only`, or `issues-only`. PR items list
+their same-repo closing refs in `closes`. `relation` is omitted when a member PR
+was scanned before this field existed, so stale rows read as unknown instead of
+getting a wrong label. re-scan once to populate it: unchanged items pick up
+closing refs (and current ciStatus/reviewCount/labels) without re-embedding.
+closing refs come from the GraphQL scan; `--use-rest` scans leave them unknown,
+like the other deep-scan signals.
+
 ## github action
 
 run pr-prism automatically on every PR:
