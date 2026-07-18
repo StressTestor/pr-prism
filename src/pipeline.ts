@@ -188,7 +188,11 @@ export async function runScan(
       if (hasEmbedding) {
         // Unchanged text, but ciStatus/reviewCount/labels/closesIssues drift
         // without bumping updatedAt — keep them current, skip the embedding.
-        store.refreshMetadata(existing.id, itemMetadata(item));
+        // Write only on drift so a quiet repo costs zero UPDATEs per scan.
+        const fresh = itemMetadata(item);
+        if (JSON.stringify(fresh) !== JSON.stringify(existing.metadata)) {
+          store.refreshMetadata(existing.id, fresh);
+        }
         skipped++;
       } else {
         recovered++;

@@ -181,6 +181,8 @@ their same-repo closing refs in `closes`. `relation` is omitted when a member PR
 was scanned before this field existed, so stale rows read as unknown instead of
 getting a wrong label. re-scan once to populate it: unchanged items pick up
 closing refs (and current ciStatus/reviewCount/labels) without re-embedding.
+closing refs come from the GraphQL scan; `--use-rest` scans leave them unknown,
+like the other deep-scan signals.
 
 ## github action
 

@@ -25,11 +25,16 @@ export function restPRState(pr: { state: string; merged_at?: string | null }): s
   return pr.merged_at ? "merged" : pr.state;
 }
 
-/** GraphQL closingIssuesReferences -> same-repo issue numbers. A fetched PR with
- * no refs is known-empty ([]), never undefined — undefined is reserved for
+/** GraphQL closingIssuesReferences -> same-repo issue numbers. Cross-repo closing
+ * refs are dropped: keeping only the bare number would alias another repo's issue
+ * onto this repo's numbering and fabricate closing edges. A fetched PR with no
+ * refs is known-empty ([]), never undefined — undefined is reserved for
  * pre-upgrade rows where the field was never scanned. */
-export function mapClosingIssues(refs: { nodes?: Array<{ number: number }> } | null | undefined): number[] {
-  return (refs?.nodes || []).map((n) => n.number);
+export function mapClosingIssues(
+  refs: { nodes?: Array<{ number: number; repository?: { nameWithOwner: string } }> } | null | undefined,
+  repoFull: string,
+): number[] {
+  return (refs?.nodes || []).filter((n) => n.repository?.nameWithOwner === repoFull).map((n) => n.number);
 }
 
 function mapCIStatus(state: string | null | undefined): PRItem["ciStatus"] {
@@ -181,7 +186,7 @@ export class GitHubClient {
                   changedFiles
                   headRefOid
                   labels(first: 20) { nodes { name } }
-                  closingIssuesReferences(first: 20) { nodes { number } }
+                  closingIssuesReferences(first: 100) { totalCount nodes { number repository { nameWithOwner } } }
                   reviews { totalCount }
                   files(first: 100) { totalCount nodes { path } }
                   commits(last: 1) {
@@ -251,8 +256,14 @@ export class GitHubClient {
           ciStatus: mapCIStatus(ciRollup),
           reviewCount: pr.reviews?.totalCount || 0,
           hasTests,
-          closesIssues: mapClosingIssues(pr.closingIssuesReferences),
+          closesIssues: mapClosingIssues(pr.closingIssuesReferences, `${this.owner}/${this.repo}`),
         });
+
+        const closingTotal = pr.closingIssuesReferences?.totalCount || 0;
+        const closingFetched = pr.closingIssuesReferences?.nodes?.length || 0;
+        if (closingTotal > closingFetched) {
+          console.warn(`warning: closing refs truncated for PR #${pr.number} (${closingFetched} of ${closingTotal})`);
+        }
       }
 
       onProgress?.(items.length, totalCount);
