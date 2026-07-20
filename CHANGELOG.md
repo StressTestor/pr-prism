@@ -2,7 +2,7 @@
 
 all notable changes to pr-prism are documented here.
 
-## [unreleased]
+## [3.1.0] — 2026-07-20
 
 ### added
 - OpenAI-compatible endpoint support (#17, PR #18 by @alteixeira20): optional `EMBEDDING_BASE_URL` / `LLM_BASE_URL` route the generic `openai` provider at any compatible service (featherless.ai tested), with URL validation (http/https only, credentials/query/fragment rejected), explicit `EMBEDDING_DIMENSIONS` for unknown models, response-index and vector validation, API-key redaction in provider errors, endpoint fingerprints instead of raw URLs in hashes and db names, a real embedding probe in `doctor`/`init`, and `benchmark --provider/--base-url/--dimensions`
