@@ -30,6 +30,7 @@ export interface StarmapItemRef {
 export interface StarmapItem extends StarmapItemRef {
   title: string;
   author: string;
+  createdAt: string;
   updatedAt: string;
   score: number;
   /** PRs only: same-repo issue numbers this PR closes. Omitted when the item
@@ -148,7 +149,10 @@ export function buildStarmapPayload(
     // contested / runnerUp come from decideCanonical so they reflect the actual
     // canonical rule (earliest-report for issue clusters), not a score sort.
     const runnerUpMargin = ranked.length >= 2 ? ranked[0].score - ranked[1].score : null;
-    const decision = decideCanonical(c.items);
+    // Identity (confirmed byte-identical) clusters resolve canonical by
+    // which-was-first, matching identity.ts's bestPick — mode "issue" is the
+    // earliest-created rule. Fuzzy clusters keep the derived state/CI/score rule.
+    const decision = decideCanonical(c.items, c.kind === "identity" ? { mode: "issue" } : undefined);
     const trackerDecision = selectTracker(c.items);
     const tracker: StarmapTracker = {
       needsTracker: trackerDecision.needsTracker,
@@ -160,6 +164,7 @@ export function buildStarmapPayload(
         ...ref(it),
         title: sanitizeTitle(it.title),
         author: it.author,
+        createdAt: it.createdAt,
         updatedAt: it.updatedAt,
         score: it.score,
       };

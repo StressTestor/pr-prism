@@ -272,3 +272,33 @@ describe("buildStarmapPayload relational classification", () => {
     expect(p.schemaVersion).toBe(1);
   });
 });
+
+describe("confirmed clusters in the starmap payload", () => {
+  it("canonical follows earliest-created for identity clusters and items carry createdAt", () => {
+    const original = item(100, "pr", 0.2, { createdAt: "2026-01-01T00:00:00Z" });
+    const copy = item(200, "pr", 0.9, { createdAt: "2026-03-01T00:00:00Z" });
+    const confirmed: Cluster = {
+      ...cluster(1, [original, copy], 1, 1),
+      kind: "identity",
+      identity: { basis: "head-oid", key: "oid" },
+    };
+    const p = buildStarmapPayload([], META, { confirmed: [confirmed] });
+    expect(p.clusters[0].canonical.number).toBe(100);
+    expect(p.clusters[0].items.every((i) => i.createdAt !== undefined)).toBe(true);
+  });
+
+  it("fuzzy PR clusters keep the quality-score canonical rule", () => {
+    const clusters = [
+      cluster(
+        1,
+        [
+          item(10, "pr", 0.9, { createdAt: "2026-03-01T00:00:00Z" }),
+          item(11, "pr", 0.2, { createdAt: "2026-01-01T00:00:00Z" }),
+        ],
+        0.9,
+        0.88,
+      ),
+    ];
+    expect(buildStarmapPayload(clusters, META).clusters[0].canonical.number).toBe(10);
+  });
+});
