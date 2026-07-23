@@ -2,6 +2,14 @@
 
 all notable changes to pr-prism are documented here.
 
+## [unreleased]
+
+### changed
+- confirmed (identity) duplicate clusters now pick canonical by earliest-created instead of quality score: byte-identical duplicates are a which-was-first question, and a copied PR can outscore the original it was lifted from. fuzzy clusters keep the state/CI/score rule. starmap `canonical`/`contested` for confirmed clusters shift accordingly (value change, schema stays v1)
+
+### added
+- starmap items now carry `createdAt` alongside `updatedAt` (additive), so consumers can render and reason about which-was-first without re-fetching from github. NOTE for star-map: its importer rejects unknown fields, so it needs the coordinated importer patch before consuming a dataset with this field
+
 ## [3.1.0] — 2026-07-20
 
 ### added

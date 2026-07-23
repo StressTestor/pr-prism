@@ -88,3 +88,23 @@ describe("diffFingerprint", () => {
     expect(diffFingerprint(a)).not.toBe(diffFingerprint(c));
   });
 });
+
+describe("identity canonical is which-was-first", () => {
+  it("earliest-created member wins the bestPick even when a later copy outscores it", () => {
+    const original = pr(100, {
+      headRefOid: "same-oid",
+      createdAt: "2026-01-01T00:00:00Z",
+      ciStatus: "unknown",
+    });
+    const copy = pr(200, {
+      headRefOid: "same-oid",
+      createdAt: "2026-03-01T00:00:00Z",
+      ciStatus: "success",
+      hasTests: true,
+      reviewCount: 3,
+    });
+    const clusters = findConfirmedDuplicates([copy, original]);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].bestPick.number).toBe(100);
+  });
+});
