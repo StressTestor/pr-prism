@@ -41,7 +41,11 @@ function pushGroup(map: Map<string, PRItem[]>, key: string, item: PRItem): void 
 
 function makeIdentityCluster(members: PRItem[], identity: { basis: "head-oid" | "patch-id"; key: string }): Cluster {
   const items = members.map(scoreClusterItem).sort((a, b) => b.score - a.score);
-  const bestPick = selectCanonical(items);
+  // Confirmed byte-identical duplicates resolve by WHICH-WAS-FIRST, not quality:
+  // a copied PR can easily outscore the original it was lifted from, and naming
+  // the copy canonical rewards the theft. mode "issue" is the earliest-created
+  // rule (with its 24h near-tie window for genuinely simultaneous pushes).
+  const bestPick = selectCanonical(items, { mode: "issue" });
   return {
     id: 0, // reassigned by the caller
     items,
