@@ -1,3 +1,4 @@
+import { itemMetadata } from "../src/pipeline.js";
 import cron from "node-cron";
 import { findDuplicateClusters } from "../src/cluster.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "../src/embeddings.js";
@@ -165,17 +166,10 @@ export async function runBacklogScan(
             title: item.title,
             bodySnippet: (item.body || "").slice(0, 2000),
             embedding,
-            metadata: {
-              author: item.author,
-              state: item.state,
-              labels: item.labels,
-              additions: item.additions,
-              deletions: item.deletions,
-              changedFiles: item.changedFiles,
-              ciStatus: item.ciStatus,
-              reviewCount: item.reviewCount,
-              hasTests: item.hasTests,
-            },
+            // Single source for stored metadata. The hand-rolled literal that
+            // was here had drifted from it, silently dropping bodyLength,
+            // nodeId, headRefOid and closesIssues on every scheduled sync.
+            metadata: itemMetadata(item),
             createdAt: item.createdAt,
             updatedAt: item.updatedAt,
           };

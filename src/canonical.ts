@@ -58,6 +58,9 @@ export interface CanonicalDecision<T> {
  * of truth, so it outranks open, which outranks a closed-unmerged PR. Absent state
  * (a triage DupeMatch has none) is 0, below every real state, so a stateless set
  * all ties here and falls through to the score/date rules unchanged.
+ *
+ * Takes the whole candidate rather than the bare state so an incident-closed
+ * item can be ranked where it sat before the incident.
  */
 function statePriority(candidate: { state?: string; incidentClosed?: boolean }): number {
   // An incident-closed item never reached a maintainer verdict, so it is ranked

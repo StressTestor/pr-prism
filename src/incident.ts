@@ -16,6 +16,8 @@ export interface IncidentWindow {
   reason: string;
 }
 
+/** Accepts null as well as undefined: a SQLite row round-trips a missing
+ * close timestamp as null, while PRItem uses undefined. */
 export interface IncidentClosable {
   state: string;
   closedAt?: string | null;

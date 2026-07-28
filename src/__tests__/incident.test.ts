@@ -63,3 +63,30 @@ describe("itemMetadata", () => {
     expect(itemMetadata(item).closedAt).toBe("2026-07-23T10:18:00Z");
   });
 });
+
+describe("incident window validation", () => {
+  function writeConfig(body: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "prism-incident-"));
+    const path = join(dir, "prism.config.yaml");
+    writeFileSync(path, `repo: odysseus-dev/odysseus\nincidents:\n${body}`);
+    return path;
+  }
+
+  it("rejects a window without an explicit UTC offset, which would parse in the host timezone", () => {
+    const path = writeConfig('  - start: "2026-07-23T00:00:00"\n    end: "2026-07-24T00:00:00Z"\n    reason: "x"\n');
+
+    expect(() => loadConfig(path)).toThrow(/offset/i);
+  });
+
+  it("rejects an unparseable timestamp instead of silently matching nothing", () => {
+    const path = writeConfig('  - start: "last tuesday"\n    end: "2026-07-24T00:00:00Z"\n    reason: "x"\n');
+
+    expect(() => loadConfig(path)).toThrow();
+  });
+
+  it("rejects a window whose end precedes its start", () => {
+    const path = writeConfig('  - start: "2026-07-24T00:00:00Z"\n    end: "2026-07-23T00:00:00Z"\n    reason: "x"\n');
+
+    expect(() => loadConfig(path)).toThrow(/end/i);
+  });
+});

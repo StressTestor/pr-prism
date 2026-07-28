@@ -16,6 +16,21 @@ vision_doc: ./VISION.md
 #   owner/repo1: ./VISION_1.md
 #   owner/repo2: ./VISION_2.md
 
+# repository-wide events that closed items for reasons unrelated to their
+# quality (a visibility flip, a bulk close, a migration). PRs closed inside a
+# window rank as open instead of rejected, so a mass auto-close does not bury
+# the exact backlog you need to triage.
+#
+# start/end MUST carry an explicit UTC offset - an offset-less timestamp is
+# parsed in the host timezone and would select a different set of PRs on your
+# laptop than in CI. Pin the window tightly: a day-wide window sweeps up items
+# that were closed deliberately on the same day.
+#
+# incidents:
+#   - start: "2026-07-23T09:00:00Z"
+#     end: "2026-07-23T11:00:00Z"
+#     reason: "repo visibility flip auto-closed all open PRs"
+
 thresholds:
   duplicate_similarity: 0.85
   aligned: 0.65

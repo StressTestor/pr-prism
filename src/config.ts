@@ -51,15 +51,36 @@ const ClusterSchema = z.object({
   bot_authors: z.array(z.string().trim().min(1)).default([]),
 });
 
+/**
+ * An absolute ISO-8601 instant. The explicit offset is required, not cosmetic:
+ * `Date.parse("2026-07-23T00:00:00")` resolves in the HOST timezone, so the
+ * same config would select a different set of items on a laptop in Denver than
+ * in CI running UTC — and `"2026-07-23"` parses as UTC while
+ * `"2026-07-23T00:00:00"` parses local, so two spellings of one day disagree.
+ * Rejecting the ambiguous forms is the only way the window means one thing.
+ */
+const AbsoluteInstant = z
+  .string()
+  .refine((s) => /(?:Z|[+-]\d{2}:?\d{2})$/.test(s.trim()), {
+    message: "must end in an explicit UTC offset (e.g. 2026-07-23T00:00:00Z or +02:00)",
+  })
+  .refine((s) => !Number.isNaN(Date.parse(s)), { message: "is not a parseable ISO-8601 timestamp" });
+
 /** A repository-wide event that closed items for reasons unrelated to their
  * quality (visibility flip, bulk close, migration). See src/incident.ts. */
-const IncidentWindowSchema = z.object({
-  /** ISO-8601, inclusive. */
-  start: z.string(),
-  /** ISO-8601, exclusive. */
-  end: z.string(),
-  reason: z.string(),
-});
+const IncidentWindowSchema = z
+  .object({
+    /** ISO-8601 with explicit offset, inclusive. */
+    start: AbsoluteInstant,
+    /** ISO-8601 with explicit offset, exclusive. */
+    end: AbsoluteInstant,
+    reason: z.string().trim().min(1),
+  })
+  // An inverted window matches nothing and reports nothing. Fail at load
+  // instead: a silent no-op here is indistinguishable from "no incident".
+  .refine((w) => Date.parse(w.end) > Date.parse(w.start), {
+    message: "incident window end must be after start",
+  });
 
 const ConfigSchema = z.object({
   version: z.number().optional().default(1),

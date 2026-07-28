@@ -138,6 +138,15 @@ export class VectorStore {
     }
   }
 
+  /** One place that decides the incident flag, so the two hydration sites
+   * cannot drift apart. */
+  private incidentFlag(metadata: { state?: unknown; closedAt?: unknown }): boolean {
+    return isIncidentClosed(
+      { state: String(metadata.state ?? ""), closedAt: (metadata.closedAt as string) ?? null },
+      this.incidentWindows,
+    );
+  }
+
   getMeta(key: string): string | undefined {
     const row = this.db.prepare("SELECT value FROM prism_meta WHERE key = ?").get(key) as any;
     return row?.value;
@@ -274,7 +283,7 @@ export class VectorStore {
         authorIsBot: metadata.authorIsBot,
         state: metadata.state,
         closedAt: metadata.closedAt,
-        incidentClosed: isIncidentClosed({ state: metadata.state, closedAt: metadata.closedAt }, this.incidentWindows),
+        incidentClosed: this.incidentFlag(metadata),
         labels: metadata.labels,
         additions: metadata.additions,
         deletions: metadata.deletions,
@@ -341,7 +350,7 @@ export class VectorStore {
         authorIsBot: metadata.authorIsBot,
         state: metadata.state,
         closedAt: metadata.closedAt,
-        incidentClosed: isIncidentClosed({ state: metadata.state, closedAt: metadata.closedAt }, this.incidentWindows),
+        incidentClosed: this.incidentFlag(metadata),
         labels: metadata.labels,
         additions: metadata.additions,
         deletions: metadata.deletions,

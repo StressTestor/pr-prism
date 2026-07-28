@@ -38,6 +38,12 @@ export function openRepoDB(
   model?: string,
 ): VectorStore {
   const dbPath = getRepoDBPath(dataDir, owner, repo);
+  // NOTE: no incident windows. Incident-aware ranking is CLI-only for now:
+  // ServerConfig has no `incidents` field and the scheduler fetches open items
+  // only, so `closedAt` is never populated on this path. Wiring the App path
+  // needs a config field, a scheduler that fetches closed items, and the
+  // triage.ts metadata literal fixed. Tracked separately; until then this
+  // store deliberately ranks the way it always has.
   return new VectorStore(dbPath, dimensions, model);
 }
 
