@@ -13,6 +13,12 @@ export interface PRItem {
   authorIsBot?: boolean;
   createdAt: string;
   updatedAt: string;
+  /** ISO-8601 close timestamp; absent while open. Retained so incident
+   * windows can distinguish a bulk auto-close from a deliberate one. */
+  closedAt?: string;
+  /** Derived at read time from the configured incident windows, never stored:
+   * correcting a window is then a config edit rather than a rescan. */
+  incidentClosed?: boolean;
   labels: string[];
   // PR-specific
   diffUrl?: string;

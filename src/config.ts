@@ -51,10 +51,21 @@ const ClusterSchema = z.object({
   bot_authors: z.array(z.string().trim().min(1)).default([]),
 });
 
+/** A repository-wide event that closed items for reasons unrelated to their
+ * quality (visibility flip, bulk close, migration). See src/incident.ts. */
+const IncidentWindowSchema = z.object({
+  /** ISO-8601, inclusive. */
+  start: z.string(),
+  /** ISO-8601, exclusive. */
+  end: z.string(),
+  reason: z.string(),
+});
+
 const ConfigSchema = z.object({
   version: z.number().optional().default(1),
   repo: z.string().optional(),
   repos: z.array(z.string()).optional(),
+  incidents: z.array(IncidentWindowSchema).optional(),
   vision_doc: z.string().optional(),
   vision_docs: z.record(z.string(), z.string()).optional(),
   thresholds: ThresholdsSchema.optional().transform((v) => ThresholdsSchema.parse(v ?? {})),

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { accountIsBot, GitHubClient, restPRState } from "../github.js";
+import { accountIsBot, GitHubClient, itemClosedAt, restPRState } from "../github.js";
 import { createWriteGate } from "../write-gate.js";
 
 function fakeOctokit() {
@@ -217,5 +217,19 @@ describe("accountIsBot", () => {
 
   it("returns undefined when the account carries no type at all", () => {
     expect(accountIsBot({})).toBeUndefined();
+  });
+});
+
+describe("itemClosedAt", () => {
+  it("reads the REST closed_at field", () => {
+    expect(itemClosedAt({ closed_at: "2026-07-23T10:18:00Z" })).toBe("2026-07-23T10:18:00Z");
+  });
+
+  it("reads the GraphQL closedAt field", () => {
+    expect(itemClosedAt({ closedAt: "2026-07-23T10:18:00Z" })).toBe("2026-07-23T10:18:00Z");
+  });
+
+  it("returns undefined for an item that is still open", () => {
+    expect(itemClosedAt({ closed_at: null })).toBeUndefined();
   });
 });

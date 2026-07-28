@@ -65,7 +65,7 @@ export async function createPipelineContext(repoOverride?: string): Promise<Pipe
     baseUrl: env.EMBEDDING_BASE_URL,
     dimensions: env.EMBEDDING_DIMENSIONS,
   });
-  const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL);
+  const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL, config.incidents ?? []);
   return { config, env, owner, repo, repoFull, github, store, embedder };
 }
 
@@ -110,11 +110,12 @@ export async function reEmbedStoredItems(
 
 /** Single source for an item's stored metadata: used for both new-item upserts
  * and the unchanged-item refresh, so drifting fields can never diverge. */
-function itemMetadata(item: PRItem): Record<string, unknown> {
+export function itemMetadata(item: PRItem): Record<string, unknown> {
   return {
     author: item.author,
     authorIsBot: item.authorIsBot,
     state: item.state,
+    closedAt: item.closedAt,
     labels: item.labels,
     additions: item.additions,
     deletions: item.deletions,

@@ -73,6 +73,8 @@ server/                 # webhook server (GitHub App)
 - **read-only default**: every GitHub mutation (labels, comments, closes, issue creation) funnels through one `write-gate.ts` gate that defaults to dry-run. CLI writes only under `--apply-labels`; the webhook server writes only when `PRISM_APPLY=1`. `--dry-run` always wins. (Fixes the prior leak where `ensureLabelsExist` created labels even under `--dry-run`, and the server writing unconditionally.)
 - **cross-repo**: config accepts multiple repos, dupe detection works across repo boundaries
 - **canonical selection**: one `selectCanonical()` (src/canonical.ts) picks each cluster's source of truth for the report, the starmap payload, and the live triage bot alike. issue-majority clusters resolve to the earliest report (the original bug); PR-majority ranks by lifecycle state (merged > open > closed), then a CI veto (a known-red build never outranks a same-state green sibling, before score), then quality score. the veto stops a high-scored PR with failing checks from becoming bestPick over the green fix that actually landed; only `ciStatus === "failure"` demotes, so a not-yet-reported PR is never penalized. fully deterministic - every tie bottoms out at item number - so re-runs name the same canonical. confirmed (identity) clusters override to the earliest-created rule: byte-identical dupes resolve by which-was-first, never score (a copy can outscore its original)
+- **incident awareness**: a repository-wide event (visibility flip, bulk close, migration) can close hundreds of PRs for reasons unrelated to their quality. because `selectCanonical()` ranks lifecycle state before score, those items would otherwise rank as rejections and sink below genuinely-closed siblings. `prism.config.yaml` accepts an `incidents:` list of `{start, end, reason}` windows; `store.ts` stamps `incidentClosed` onto each item at hydration via `isIncidentClosed()` (src/incident.ts), and `statePriority()` ranks an incident-closed PR as open. the raw `closedAt` is what gets persisted, never the derived flag - so correcting a mis-set window is a config edit, not a rescan of the whole backlog. the starmap payload carries `incidentClosed: true` (omitted when false, keeping the contract additive) so a consumer can bucket them for re-triage rather than treating them as rejected
+
 - **cluster confidence**: clustering is single-linkage (BFS over pairs >= threshold) with a centroid-refinement pass to break chained mega-clusters. because single-linkage can still chain in loosely-related members, each cluster reports both `avgSimilarity` and `minSimilarity` (lowest pairwise). the report/dupes output surfaces min as a confidence tier (high >= 90%, solid >= 80%, loose < 80%) so a low-min "loose" cluster gets eyeballed before anything is closed. avg and min are computed exactly over all pairs (no sampling), so the tier a maintainer sees is reproducible run to run
 
 ## database
@@ -81,7 +83,7 @@ single SQLite database per project, managed by `store.ts`.
 
 | table | purpose |
 |-------|---------|
-| items | PRs and issues with metadata |
+| items | PRs and issues with metadata (incl. `closedAt` in `metadata_json`; no migration needed) |
 | embeddings | vector embeddings (sqlite-vec) |
 | prism_meta | config versioning, model mismatch detection |
 
@@ -105,4 +107,4 @@ npm run server       # start webhook server
 - the npm package excludes compiled tests (`tsconfig.build.json`); `npm run build` cleans `dist/` first so stale artifacts can't leak into a publish (the 2.0.1 orphan-file gotcha)
 - brew tap bump is manual: update `Formula/prism-triage.rb` (tarball url + sha256) in StressTestor/homebrew-tap after the GitHub Release exists
 
-last updated: 2026-07-13
+last updated: 2026-07-28

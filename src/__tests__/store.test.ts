@@ -313,6 +313,63 @@ describe("closesIssues metadata round-trip", () => {
     expect(store.getAllItems("owner/repo")).toHaveLength(1);
     store.close();
   });
+
+  it("hydrates closedAt so incident windows can be applied without a rescan", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4);
+    store.upsert({
+      id: "odysseus-dev/odysseus#5559",
+      type: "pr",
+      number: 5559,
+      repo: "odysseus-dev/odysseus",
+      title: "fix(rag): skip hidden dirs",
+      bodySnippet: "",
+      embedding: new Float32Array(4),
+      metadata: { state: "closed", closedAt: "2026-07-23T10:18:00Z" },
+      createdAt: "2026-07-20T00:00:00Z",
+      updatedAt: "2026-07-23T10:18:00Z",
+    });
+
+    const [item] = store.getAllItems("odysseus-dev/odysseus") as any[];
+
+    expect(item.closedAt).toBe("2026-07-23T10:18:00Z");
+  });
+
+  it("marks items closed inside a configured incident window", () => {
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4, undefined, [
+      { start: "2026-07-23T00:00:00Z", end: "2026-07-24T00:00:00Z", reason: "visibility flip" },
+    ]);
+    const base = {
+      type: "pr" as const,
+      repo: "odysseus-dev/odysseus",
+      title: "t",
+      bodySnippet: "",
+      embedding: new Float32Array(4),
+      createdAt: "2026-07-20T00:00:00Z",
+      updatedAt: "2026-07-23T10:18:00Z",
+    };
+    store.upsert({
+      ...base,
+      id: "a",
+      number: 1,
+      metadata: { state: "closed", closedAt: "2026-07-23T10:18:00Z" },
+    });
+    store.upsert({
+      ...base,
+      id: "b",
+      number: 2,
+      metadata: { state: "closed", closedAt: "2026-07-01T00:00:00Z" },
+    });
+
+    const items = store.getAllItems("odysseus-dev/odysseus") as any[];
+    const byNumber = new Map(items.map((i) => [i.number, i.incidentClosed]));
+
+    expect(byNumber.get(1)).toBe(true);
+    expect(byNumber.get(2)).toBe(false);
+  });
 });
 
 describe("bot authorship round-trip", () => {

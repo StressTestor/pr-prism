@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
+import { type IncidentWindow, isIncidentClosed } from "./incident.js";
 import type { StoreItem } from "./types.js";
 
 export class VectorStore {
@@ -9,7 +10,14 @@ export class VectorStore {
   private dimensions: number;
   private embeddingModel?: string;
 
-  constructor(dbPath?: string, dimensions?: number, embeddingModel?: string) {
+  constructor(
+    dbPath?: string,
+    dimensions?: number,
+    embeddingModel?: string,
+    /** Repository-wide events that closed items for non-quality reasons.
+     * Applied at read time so a corrected window needs no rescan. */
+    private incidentWindows: readonly IncidentWindow[] = [],
+  ) {
     const p = dbPath || resolve(process.cwd(), "data", "prism.db");
     mkdirSync(resolve(p, ".."), { recursive: true });
     this.db = new Database(p);
@@ -265,6 +273,8 @@ export class VectorStore {
         author: metadata.author,
         authorIsBot: metadata.authorIsBot,
         state: metadata.state,
+        closedAt: metadata.closedAt,
+        incidentClosed: isIncidentClosed({ state: metadata.state, closedAt: metadata.closedAt }, this.incidentWindows),
         labels: metadata.labels,
         additions: metadata.additions,
         deletions: metadata.deletions,
@@ -330,6 +340,8 @@ export class VectorStore {
         author: metadata.author,
         authorIsBot: metadata.authorIsBot,
         state: metadata.state,
+        closedAt: metadata.closedAt,
+        incidentClosed: isIncidentClosed({ state: metadata.state, closedAt: metadata.closedAt }, this.incidentWindows),
         labels: metadata.labels,
         additions: metadata.additions,
         deletions: metadata.deletions,
