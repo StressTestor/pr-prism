@@ -6,6 +6,7 @@ import {
   benchmarkDatabasePath,
   computeClusterOverlap,
   ensureBenchmarkModels,
+  resolveBenchmarkOutPath,
   resolveBenchmarkProviderConfig,
   runBenchmarkForModel,
 } from "../benchmark.js";
@@ -371,5 +372,29 @@ describe.sequential("benchmark provider selection", () => {
       baseUrl: undefined,
       dimensions: undefined,
     });
+  });
+});
+
+describe("resolveBenchmarkOutPath", () => {
+  it("defaults to data/benchmark-results.json under the working directory", () => {
+    expect(resolveBenchmarkOutPath(undefined, "/work")).toBe("/work/data/benchmark-results.json");
+  });
+
+  it("resolves a relative path against the working directory", () => {
+    expect(resolveBenchmarkOutPath("out/local.json", "/work")).toBe("/work/out/local.json");
+  });
+
+  it("keeps an absolute path as given", () => {
+    expect(resolveBenchmarkOutPath("/tmp/run-a.json", "/work")).toBe("/tmp/run-a.json");
+  });
+
+  it("rejects a path that is empty or only whitespace", () => {
+    // A silent fall back to the default would overwrite the previous run,
+    // which is the exact data loss this option exists to prevent.
+    expect(() => resolveBenchmarkOutPath("   ", "/work")).toThrow(/--out/);
+  });
+
+  it("rejects a directory-looking path", () => {
+    expect(() => resolveBenchmarkOutPath("out/", "/work")).toThrow(/file path/);
   });
 });
