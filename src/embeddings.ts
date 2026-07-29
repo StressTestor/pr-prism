@@ -396,7 +396,35 @@ export async function createEmbeddingProvider(config: ProviderConfig): Promise<E
 // the embedding config hash so a format change invalidates cached embeddings and
 // the scan warns to re-embed, instead of silently mixing old and new text vectors.
 // v1: "Pull Request:"/"Issue:" type prefix. v2: no prefix.
-export const EMBEDDING_TEXT_VERSION = 2;
+// v3: per-model task prefix (see TASK_PREFIXES). Models with no entry emit
+// byte-identical text to v2, but the version still bumps: the model name alone
+// cannot distinguish vectors cached before a prefix existed for that model.
+export const EMBEDDING_TEXT_VERSION = 3;
+
+/**
+ * Task instructions some models are trained to receive. Omitting the prompt on
+ * a model that expects one measurably degrades it, so benchmarking such a model
+ * without this would under-report it and wrongly favour the incumbent.
+ *
+ * Keyed by ollama slug with the `:tag` stripped. Deliberately an allowlist: an
+ * unknown model gets no prefix, because inventing an instruction format a model
+ * was not trained on is worse than sending none.
+ *
+ * Clustering rather than retrieval: this pipeline compares items to each other
+ * to find duplicates. It has no query/document asymmetry.
+ */
+const TASK_PREFIXES: Readonly<Record<string, string>> = Object.freeze({
+  // https://ai.google.dev/gemma/docs/embeddinggemma — prompt set includes
+  // "task: clustering | query: " for grouping semantically similar text.
+  embeddinggemma: "task: clustering | query: ",
+});
+
+/** Ollama slugs carry a `:tag` (embeddinggemma:300m); the prompt is a property
+ * of the model family, not the quantisation. */
+export function taskPrefixFor(model?: string): string {
+  if (!model) return "";
+  return TASK_PREFIXES[model.split(":")[0].trim().toLowerCase()] ?? "";
+}
 
 export type EmbeddingVectorGeneration = "native" | "provider-selected-v1" | "local-truncation-v1";
 
@@ -441,11 +469,13 @@ export function effectiveEmbeddingConfigHash(
   );
 }
 
-export function prepareEmbeddingText(item: { title: string; body: string; type: string }): string {
+export function prepareEmbeddingText(item: { title: string; body: string; type: string }, model?: string): string {
   // No type prefix. A leading "Pull Request:" / "Issue:" token systematically
   // pushes an issue away from its own fix PR in embedding space, which fragments
   // a single bug across separate clusters. Only takes effect after a re-embed.
   const title = (item.title || "Untitled").trim();
   const body = (item.body || "").trim().slice(0, 2000);
-  return body ? `${title}\n\n${body}` : title;
+  const text = body ? `${title}\n\n${body}` : title;
+  // Model-specific task instruction, empty for models that do not use one.
+  return `${taskPrefixFor(model)}${text}`;
 }

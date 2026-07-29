@@ -261,7 +261,7 @@ export async function runBenchmarkForModel(
 
     for (let i = 0; i < allItems.length; i += batchSize) {
       const batch = allItems.slice(i, i + batchSize);
-      const texts = batch.map((item) => prepareEmbeddingText(item));
+      const texts = batch.map((item) => prepareEmbeddingText(item, model));
 
       let embeddings: number[][];
       try {

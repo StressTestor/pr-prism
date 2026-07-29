@@ -152,3 +152,26 @@ describe("embeddingConfigHash", () => {
     );
   });
 });
+
+describe("prepareEmbeddingText task prefixes", () => {
+  const item = { title: "Fix login bug", body: "resolves the redirect loop", type: "pr" };
+
+  it("prefixes the clustering task for a model trained to expect one", () => {
+    const result = prepareEmbeddingText(item, "embeddinggemma");
+
+    expect(result.startsWith("task: clustering | query: ")).toBe(true);
+    expect(result).toContain("Fix login bug");
+  });
+
+  it("leaves output byte-identical for a model with no task prompt", () => {
+    expect(prepareEmbeddingText(item, "nomic-embed-text-v2-moe")).toBe(prepareEmbeddingText(item));
+  });
+
+  it("adds no prefix for an unrecognised model, so a new model cannot be silently mangled", () => {
+    expect(prepareEmbeddingText(item, "some-future-model")).toBe(prepareEmbeddingText(item));
+  });
+
+  it("matches a tagged model variant, since ollama slugs carry a :tag", () => {
+    expect(prepareEmbeddingText(item, "embeddinggemma:300m").startsWith("task: clustering | query: ")).toBe(true);
+  });
+});
