@@ -257,6 +257,7 @@ export async function runBenchmarkForModel(
   thresholds: number[],
   allItems: PRItem[],
   providerConfig: Omit<ProviderConfig, "model">,
+  opts?: { includeBotAuthors?: boolean },
 ): Promise<ModelResult> {
   const spinner = ora(`[${model}] creating embedder`).start();
   let store: VectorStore | undefined;
@@ -356,7 +357,11 @@ export async function runBenchmarkForModel(
     const clustersByThreshold: Record<string, number> = {};
 
     for (const threshold of thresholds) {
-      const clusters = findDuplicateClusters(store, allItems, { threshold, repo: repoFull });
+      const clusters = findDuplicateClusters(store, allItems, {
+        threshold,
+        repo: repoFull,
+        includeBotAuthors: opts?.includeBotAuthors,
+      });
       clustersByThreshold[threshold.toString()] = clusters.length;
     }
 
@@ -391,6 +396,8 @@ export interface BenchmarkOptions {
   provider?: string;
   baseUrl?: string;
   dimensions?: number;
+  /** Cluster bot-authored items too; off by default, as everywhere else. */
+  includeBotAuthors?: boolean;
 }
 
 export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
@@ -465,7 +472,9 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
   // run benchmark for each model
   const results: ModelResult[] = [];
   for (const model of models) {
-    const result = await runBenchmarkForModel(model, repoFull, thresholds, allItems, providerConfig);
+    const result = await runBenchmarkForModel(model, repoFull, thresholds, allItems, providerConfig, {
+      includeBotAuthors: opts.includeBotAuthors,
+    });
     results.push(result);
   }
 
@@ -511,7 +520,11 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
     });
     const baseStore = new VectorStore(baseDbPath);
     const baseItems = baseStore.getAllItems(repoFull) as unknown as PRItem[];
-    const baseClusters = findDuplicateClusters(baseStore, baseItems, { threshold: t, repo: repoFull });
+    const baseClusters = findDuplicateClusters(baseStore, baseItems, {
+      threshold: t,
+      repo: repoFull,
+      includeBotAuthors: opts.includeBotAuthors,
+    });
     const baseSimplified: SimplifiedCluster[] = baseClusters.map((c) => ({
       id: c.id,
       items: c.items.map((item) => item.number),
@@ -526,7 +539,11 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
       });
       const store = new VectorStore(dbPath);
       const items = store.getAllItems(repoFull) as unknown as PRItem[];
-      const clusters = findDuplicateClusters(store, items, { threshold: t, repo: repoFull });
+      const clusters = findDuplicateClusters(store, items, {
+        threshold: t,
+        repo: repoFull,
+        includeBotAuthors: opts.includeBotAuthors,
+      });
       const simplified: SimplifiedCluster[] = clusters.map((c) => ({
         id: c.id,
         items: c.items.map((item) => item.number),

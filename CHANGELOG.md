@@ -10,6 +10,7 @@ all notable changes to pr-prism are documented here.
 
 ### added
 - scans record `authorIsBot` from github's own account type (graphql `__typename`, rest `user.type`) rather than guessing. rows scanned before this field fall back to a login check, so bot filtering works without a rescan
+- `prism benchmark --include-bot-authors` clusters bot-authored items too. the benchmark has no `prism.config.yaml` in scope, so without this it could only ever measure the filtered default - which is the wrong tool for asking what filtering actually changes. applies to the cluster counts and the recorded membership together, so the two cannot disagree
 - `prism benchmark --out <path>` writes a run's results to a chosen file. every run previously wrote `data/benchmark-results.json`, so a second run silently destroyed the first one's numbers - an hour of embedding lost to starting the next comparison. an empty or directory-shaped value is rejected rather than falling back to the default
 - benchmark results now record `clusterMembership` per model per threshold. cluster counts cannot tell you whether a model finding more clusters is catching real duplicates or chaining unrelated items, and re-deriving membership means re-embedding the whole corpus
 - starmap items now carry `createdAt` alongside `updatedAt` (additive), so consumers can render and reason about which-was-first without re-fetching from github. star-map's importer rejects unknown fields; the coordinated patch is star-map PR #11, which must land before it consumes a dataset carrying this field

@@ -923,6 +923,7 @@ program
   .option("--models <models>", "Comma-separated embedding models to compare", "nomic-embed-text,qwen3-embedding:0.6b")
   .option("--thresholds <thresholds>", "Comma-separated similarity thresholds", "0.82,0.85")
   .option("--out <path>", "Results file for this run (default: data/benchmark-results.json)")
+  .option("--include-bot-authors", "Cluster bot-authored items too (excluded by default)")
   .action(async (opts) => {
     await runBenchmark({
       repo: opts.repo,
@@ -932,6 +933,7 @@ program
       models: opts.models,
       thresholds: opts.thresholds,
       out: opts.out,
+      includeBotAuthors: opts.includeBotAuthors,
     });
   });
 
