@@ -370,6 +370,44 @@ describe("closesIssues metadata round-trip", () => {
     expect(byNumber.get(1)).toBe(true);
     expect(byNumber.get(2)).toBe(false);
   });
+
+  it("marks them on the multi-repo read path too", () => {
+    // getAllItemsMulti duplicates the hydration literal for the >1 repo branch,
+    // and that copy is what cross-repo `dupes` uses. An omission there is
+    // invisible from the single-repo tests above.
+    const path = tmpDb();
+    dbs.push(path);
+    const store = new VectorStore(path, 4, undefined, [
+      { start: "2026-07-23T00:00:00Z", end: "2026-07-24T00:00:00Z", reason: "visibility flip" },
+    ]);
+    const base = {
+      type: "pr" as const,
+      title: "t",
+      bodySnippet: "",
+      embedding: new Float32Array(4),
+      createdAt: "2026-07-20T00:00:00Z",
+      updatedAt: "2026-07-23T10:18:00Z",
+    };
+    store.upsert({
+      ...base,
+      id: "a",
+      number: 1,
+      repo: "owner/one",
+      metadata: { state: "closed", closedAt: "2026-07-23T10:18:00Z" },
+    });
+    store.upsert({
+      ...base,
+      id: "b",
+      number: 2,
+      repo: "owner/two",
+      metadata: { state: "closed", closedAt: "2026-07-01T00:00:00Z" },
+    });
+
+    const items = store.getAllItemsMulti(["owner/one", "owner/two"]) as any[];
+    const byNumber = new Map(items.map((i) => [i.number, i.incidentClosed]));
+    expect(byNumber.get(1)).toBe(true);
+    expect(byNumber.get(2)).toBe(false);
+  });
 });
 
 describe("bot authorship round-trip", () => {
