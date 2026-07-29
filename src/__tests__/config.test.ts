@@ -150,4 +150,17 @@ describe("bot author clustering config", () => {
     const cfg = load("repo: owner/name\ncluster:\n  include_bot_authors: true\n");
     expect(cfg.cluster.include_bot_authors).toBe(true);
   });
+
+  it("accepts repo-specific bot logins, since the built-in list cannot know them", () => {
+    const cfg = load("repo: owner/name\ncluster:\n  bot_authors:\n    - acme-ci\n    - our-release-bot\n");
+    expect(cfg.cluster.bot_authors).toEqual(["acme-ci", "our-release-bot"]);
+  });
+
+  it("defaults bot_authors to empty", () => {
+    expect(load("repo: owner/name\n").cluster.bot_authors).toEqual([]);
+  });
+
+  it("rejects a blank bot login rather than silently matching nothing", () => {
+    expect(() => load("repo: owner/name\ncluster:\n  bot_authors:\n    - '  '\n")).toThrow();
+  });
 });

@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { findDuplicateClusters } from "../cluster.js";
 import { VectorStore } from "../store.js";
 import type { PRItem, StoreItem } from "../types.js";
@@ -422,5 +422,60 @@ describe("findDuplicateClusters bot filtering", () => {
     });
     store.close();
     expect(clusters).toHaveLength(1);
+  });
+});
+
+describe("findDuplicateClusters exclusion scope", () => {
+  const dbs: string[] = [];
+  afterEach(() => {
+    for (const db of dbs) {
+      try {
+        rmSync(resolve(db, ".."), { recursive: true, force: true });
+      } catch {}
+    }
+    dbs.length = 0;
+  });
+
+  it("only bot items are removed, not every store row missing from `items`", () => {
+    // Bot filtering must not quietly change how the clusterer treats store
+    // rows the caller did not pass in; that is a separate behaviour.
+    const db = tmpDb();
+    dbs.push(db);
+    const store = new VectorStore(db, 2);
+    // #1 and #2 are too far apart to link directly; #3 sits between them and
+    // bridges the two under single-linkage.
+    const inStore = [makePR(1, "a"), makePR(2, "b"), makePR(3, "bridge")];
+    const embs = [new Float32Array([1, 0]), new Float32Array([1, 0.6]), new Float32Array([1, 0.3])];
+    inStore.forEach((it, i) => {
+      store.upsert(storeItem(it, embs[i]));
+    });
+    // Caller passes only #1 and #2; #3 is a store row it did not hand over.
+    const clusters = findDuplicateClusters(store, [inStore[0], inStore[1]], {
+      threshold: 0.9,
+      repo: "test/repo",
+    });
+    store.close();
+    // Unchanged from before bot filtering: #3 still bridges, so #1 and #2 land
+    // in one cluster and #3 is simply absent from its item list.
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].items.map((i) => i.number).sort()).toEqual([1, 2]);
+  });
+
+  it("does not count bot items in the zero-vector warning", () => {
+    const db = tmpDb();
+    dbs.push(db);
+    const store = new VectorStore(db, 2);
+    const items = [makePR(1, "a"), makePR(2, "b"), { ...makePR(3, "bot"), author: "dependabot[bot]" }];
+    store.upsert(storeItem(items[0], new Float32Array([1, 0])));
+    store.upsert(storeItem(items[1], new Float32Array([1, 0.001])));
+    store.upsert(storeItem(items[2], new Float32Array([0, 0])));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    store.close();
+    const warned = warn.mock.calls.map((c) => String(c[0])).join("\n");
+    warn.mockRestore();
+    // The only zero vector belongs to an excluded bot, so there is nothing to
+    // tell the user about.
+    expect(warned).not.toMatch(/zero-vector/);
   });
 });

@@ -380,6 +380,7 @@ export async function runDupes(
     threshold,
     repo: repoFull,
     includeBotAuthors: config.cluster.include_bot_authors,
+    botAuthors: new Set(config.cluster.bot_authors),
   });
   spinner.succeed(`Found ${clusters.length} duplicate clusters`);
 
@@ -490,6 +491,7 @@ export async function runDupesMulti(
     threshold,
     repo: repos,
     includeBotAuthors: config.cluster.include_bot_authors,
+    botAuthors: new Set(config.cluster.bot_authors),
   });
   spinner.succeed(`Found ${clusters.length} duplicate clusters across ${repos.length} repos`);
 

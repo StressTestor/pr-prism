@@ -17,6 +17,8 @@ export interface ClusterOptions {
    * near-identical and surface as duplicates that no one can act on.
    */
   includeBotAuthors?: boolean;
+  /** Extra bot logins beyond the built-in list, from `cluster.bot_authors`. */
+  botAuthors?: ReadonlySet<string>;
 }
 
 /**
@@ -55,10 +57,30 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
   const repos = Array.isArray(opts.repo) ? opts.repo : [opts.repo];
   const allEmbeddings = repos.length === 1 ? store.getAllEmbeddings(repos[0]) : store.getAllEmbeddingsMulti(repos);
 
-  // Filter out zero vectors (failed embeddings)
+  const itemMap = new Map<string, PRItem>();
+  // Excluded before the graph is built, not after it is scored. An excluded
+  // item left in `embeddings` still joins the adjacency graph, so under
+  // single-linkage it can bridge two unrelated items into one component, and
+  // it is still counted by the avg/min similarity pass below even after being
+  // dropped from the cluster's item list.
+  const excludedIds = new Set<string>();
+  for (const item of items) {
+    const id = `${item.repo}:${item.type}:${item.number}`;
+    if (!opts.includeBotAuthors && isBotAuthor(item, opts.botAuthors)) {
+      excludedIds.add(id);
+      continue;
+    }
+    itemMap.set(id, item);
+  }
+
+  // Filter out zero vectors (failed embeddings). Excluded items are dropped
+  // first so the warning counts only rows a caller can actually do something
+  // about. Store rows the caller did not pass in are left alone: whether they
+  // belong in the graph is a separate question from bot filtering.
   const embeddings = new Map<string, Float32Array>();
   let zeroCount = 0;
   for (const [id, emb] of allEmbeddings) {
+    if (excludedIds.has(id)) continue;
     if (isZeroVector(emb)) {
       zeroCount++;
     } else {
@@ -67,21 +89,6 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
   }
   if (zeroCount > 0) {
     console.warn(`warning: ${zeroCount} items have zero-vector embeddings and were excluded from clustering`);
-  }
-
-  const itemMap = new Map<string, PRItem>();
-  for (const item of items) {
-    if (!opts.includeBotAuthors && isBotAuthor(item)) continue;
-    itemMap.set(`${item.repo}:${item.type}:${item.number}`, item);
-  }
-
-  // Drop excluded embeddings here rather than filtering the finished clusters.
-  // An item left in `embeddings` still joins the adjacency graph, so under
-  // single-linkage it can bridge two unrelated items into one component, and
-  // it is still counted by the avg/min similarity pass below even after being
-  // dropped from the cluster's item list.
-  for (const id of [...embeddings.keys()]) {
-    if (!itemMap.has(id)) embeddings.delete(id);
   }
 
   const ids = [...embeddings.keys()];

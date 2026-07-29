@@ -43,6 +43,12 @@ const ClusterSchema = z.object({
    * as duplicates no maintainer can act on.
    */
   include_bot_authors: z.boolean().default(false),
+  /**
+   * Extra bot logins for this repo, added to the built-in list. A
+   * self-hosted or org-specific bot is invisible to pr-prism otherwise, and
+   * the only alternative would be turning bot filtering off entirely.
+   */
+  bot_authors: z.array(z.string().trim().min(1)).default([]),
 });
 
 const ConfigSchema = z.object({
