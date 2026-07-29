@@ -44,7 +44,7 @@ src/                    # CLI tool (published to npm as prism-triage)
   reviewer.ts           # multi-provider LLM review
   labels.ts             # GitHub label management with rate limiting
   write-gate.ts         # one dry-run-by-default gate every GitHub mutation funnels through (read-only ethos)
-  benchmark.ts          # embedding provider benchmark tool
+  benchmark.ts          # embedding provider benchmark tool (--out per-run results + cluster membership)
   config.ts             # Zod-validated YAML + env config
   errors.ts             # typed error classes
   types.ts              # shared interfaces

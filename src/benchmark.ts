@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import chalk from "chalk";
 import Table from "cli-table3";
 import ora from "ora";
@@ -42,12 +42,42 @@ export interface BenchmarkResult {
   models: ModelResult[];
   thresholds: number[];
   overlaps: Array<{ model: string; threshold: number; overlap: OverlapResult }>;
+  /**
+   * Cluster membership per model per threshold. Counts alone cannot answer
+   * whether a model that finds more clusters is catching real duplicates or
+   * chaining unrelated items, and re-deriving membership means re-embedding
+   * the corpus, so it is recorded here.
+   */
+  clusterMembership: Array<{ model: string; threshold: number; clusters: SimplifiedCluster[] }>;
   timestamp: string;
 }
 
 export interface BenchmarkEndpointIdentity {
   baseUrl?: string;
   fingerprint?: string;
+}
+
+/**
+ * Where a benchmark run writes its results.
+ *
+ * Defaults to data/benchmark-results.json, which every run shares. Two runs in
+ * a row therefore leave only the second one's numbers on disk, so a comparison
+ * that took an hour to produce can be lost by starting the next one. Passing
+ * --out gives each run its own file.
+ *
+ * An empty or directory-shaped value is rejected rather than quietly falling
+ * back to the default, since the fallback is the data loss being avoided.
+ */
+export function resolveBenchmarkOutPath(out: string | undefined, cwd: string = process.cwd()): string {
+  if (out === undefined) return resolve(cwd, "data", "benchmark-results.json");
+  const trimmed = out.trim();
+  if (!trimmed) {
+    throw new Error("--out must be a file path, not an empty value");
+  }
+  if (/[/\\]$/.test(trimmed)) {
+    throw new Error(`--out must be a file path, not a directory: ${out}`);
+  }
+  return resolve(cwd, trimmed);
 }
 
 export function benchmarkDatabasePath(
@@ -351,6 +381,8 @@ export async function runBenchmarkForModel(
 // ── main benchmark runner ────────────────────────────────────────
 
 export interface BenchmarkOptions {
+  /** Results file for this run; defaults to data/benchmark-results.json. */
+  out?: string;
   repo?: string;
   models: string;
   thresholds?: string;
@@ -469,6 +501,7 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
   // ── overlap: each model vs baseline (first model) ───────────
   const baseline = results[0];
   const allOverlaps: Array<{ model: string; threshold: number; overlap: OverlapResult }> = [];
+  const clusterMembership: Array<{ model: string; threshold: number; clusters: SimplifiedCluster[] }> = [];
 
   // Load baseline clusters once per threshold
   for (const t of thresholds) {
@@ -483,6 +516,7 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
       items: c.items.map((item) => item.number),
     }));
     baseStore.close();
+    clusterMembership.push({ model: baseline.model, threshold: t, clusters: baseSimplified });
 
     for (let ri = 1; ri < results.length; ri++) {
       const r = results[ri];
@@ -497,6 +531,7 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
         items: c.items.map((item) => item.number),
       }));
       store.close();
+      clusterMembership.push({ model: r.model, threshold: t, clusters: simplified });
 
       const overlap = computeClusterOverlap(baseSimplified, simplified);
       allOverlaps.push({ model: r.model, threshold: t, overlap });
@@ -530,10 +565,12 @@ export async function runBenchmark(opts: BenchmarkOptions): Promise<void> {
     models: results,
     thresholds,
     overlaps: allOverlaps,
+    clusterMembership,
     timestamp: new Date().toISOString(),
   };
 
-  const outPath = resolve(process.cwd(), "data", "benchmark-results.json");
+  const outPath = resolveBenchmarkOutPath(opts.out);
+  mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, JSON.stringify(benchmarkResult, null, 2));
   console.log(chalk.green(`\nresults saved to ${outPath}`));
 }

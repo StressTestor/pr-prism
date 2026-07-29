@@ -912,6 +912,7 @@ program
   .option("--dimensions <integer>", "Output dimensions (falls back to EMBEDDING_DIMENSIONS)", parseBenchmarkDimensions)
   .option("--models <models>", "Comma-separated embedding models to compare", "nomic-embed-text,qwen3-embedding:0.6b")
   .option("--thresholds <thresholds>", "Comma-separated similarity thresholds", "0.82,0.85")
+  .option("--out <path>", "Results file for this run (default: data/benchmark-results.json)")
   .action(async (opts) => {
     await runBenchmark({
       repo: opts.repo,
@@ -920,6 +921,7 @@ program
       dimensions: opts.dimensions,
       models: opts.models,
       thresholds: opts.thresholds,
+      out: opts.out,
     });
   });
 
