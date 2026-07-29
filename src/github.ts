@@ -178,7 +178,7 @@ export class GitHubClient {
                   title
                   body
                   state
-                  author { login }
+                  author { login __typename }
                   createdAt
                   updatedAt
                   additions
@@ -245,6 +245,7 @@ export class GitHubClient {
           body: pr.body || "",
           state: pr.state.toLowerCase(),
           author: pr.author?.login || "unknown",
+          authorIsBot: pr.author?.__typename === "Bot",
           createdAt: pr.createdAt,
           nodeId: pr.id,
           headRefOid: pr.headRefOid,
@@ -298,7 +299,7 @@ export class GitHubClient {
                   title
                   body
                   state
-                  author { login }
+                  author { login __typename }
                   createdAt
                   updatedAt
                   labels(first: 20) { nodes { name } }
@@ -337,6 +338,7 @@ export class GitHubClient {
           body: issue.body || "",
           state: issue.state.toLowerCase(),
           author: issue.author?.login || "unknown",
+          authorIsBot: issue.author?.__typename === "Bot",
           createdAt: issue.createdAt,
           nodeId: issue.id,
           updatedAt: issue.updatedAt,
@@ -412,6 +414,7 @@ export class GitHubClient {
           body: pr.body || "",
           state: restPRState(pr),
           author: pr.user?.login || "unknown",
+          authorIsBot: pr.user?.type === "Bot",
           createdAt: pr.created_at,
           nodeId: pr.node_id,
           headRefOid: pr.head?.sha,
@@ -469,6 +472,7 @@ export class GitHubClient {
           body: issue.body || "",
           state: issue.state,
           author: issue.user?.login || "unknown",
+          authorIsBot: issue.user?.type === "Bot",
           createdAt: issue.created_at,
           nodeId: issue.node_id,
           updatedAt: issue.updated_at,
@@ -503,6 +507,7 @@ export class GitHubClient {
       body: pr.body || "",
       state: restPRState(pr),
       author: pr.user?.login || "unknown",
+      authorIsBot: pr.user?.type === "Bot",
       createdAt: pr.created_at,
       updatedAt: pr.updated_at,
       labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name || "")),

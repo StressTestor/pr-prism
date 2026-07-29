@@ -1,3 +1,4 @@
+import { isBotAuthor } from "./bots.js";
 import { selectCanonical } from "./canonical.js";
 import { DEFAULT_SCORING_WEIGHTS } from "./config.js";
 import { normalizeDescriptionQuality, normalizeDiffSize } from "./scorer.js";
@@ -10,6 +11,12 @@ export { cosineSimilarity } from "./similarity.js";
 export interface ClusterOptions {
   threshold: number;
   repo: string | string[];
+  /**
+   * Cluster bot-authored items too. Off by default: automation reuses titles
+   * for unrelated content, so consecutive dependabot PRs embed as
+   * near-identical and surface as duplicates that no one can act on.
+   */
+  includeBotAuthors?: boolean;
 }
 
 /**
@@ -64,7 +71,17 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
 
   const itemMap = new Map<string, PRItem>();
   for (const item of items) {
+    if (!opts.includeBotAuthors && isBotAuthor(item)) continue;
     itemMap.set(`${item.repo}:${item.type}:${item.number}`, item);
+  }
+
+  // Drop excluded embeddings here rather than filtering the finished clusters.
+  // An item left in `embeddings` still joins the adjacency graph, so under
+  // single-linkage it can bridge two unrelated items into one component, and
+  // it is still counted by the avg/min similarity pass below even after being
+  // dropped from the cluster's item list.
+  for (const id of [...embeddings.keys()]) {
+    if (!itemMap.has(id)) embeddings.delete(id);
   }
 
   const ids = [...embeddings.keys()];

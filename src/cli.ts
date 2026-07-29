@@ -488,6 +488,7 @@ program
         const clusters = findDuplicateClusters(ctx.store, items, {
           threshold,
           repo: isMultiRepo ? repos : ctx.repoFull,
+          includeBotAuthors: ctx.config.cluster.include_bot_authors,
         });
         const cluster = clusters.find((c) => c.id === parseInt(opts.cluster, 10));
         if (!cluster) {
@@ -1118,6 +1119,7 @@ program
     const clusters = findDuplicateClusters(store, items, {
       threshold: config.thresholds.duplicate_similarity,
       repo: repoFull,
+      includeBotAuthors: config.cluster.include_bot_authors,
     });
     const dupeItemCount = clusters.reduce((s, c) => s + c.items.length, 0);
 
