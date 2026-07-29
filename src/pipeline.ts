@@ -84,11 +84,14 @@ export async function reEmbedStoredItems(
   for (let i = 0; i < items.length; i += batchSize) {
     const batch = items.slice(i, i + batchSize);
     const texts = batch.map((item) =>
-      prepareEmbeddingText({
-        title: item.title,
-        body: item.bodySnippet,
-        type: item.type,
-      }),
+      prepareEmbeddingText(
+        {
+          title: item.title,
+          body: item.bodySnippet,
+          type: item.type,
+        },
+        providerConfig.model,
+      ),
     );
     const embeddings = await embedder.embedBatch(texts);
     for (let j = 0; j < batch.length; j++) {
@@ -263,7 +266,7 @@ export async function runScan(
 
   for (let i = 0; i < newItems.length; i += BATCH_SIZE) {
     const batch = newItems.slice(i, i + BATCH_SIZE);
-    const texts = batch.map((item) => prepareEmbeddingText(item));
+    const texts = batch.map((item) => prepareEmbeddingText(item, env.EMBEDDING_MODEL));
     const embedWithRetry = async (input: string[]): Promise<number[][]> => {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
