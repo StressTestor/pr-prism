@@ -398,3 +398,60 @@ describe("resolveBenchmarkOutPath", () => {
     expect(() => resolveBenchmarkOutPath("out/", "/work")).toThrow(/file path/);
   });
 });
+
+describe("benchmark bot filtering", () => {
+  const cwd = process.cwd();
+  afterEach(() => {
+    process.chdir(cwd);
+    vi.unstubAllGlobals();
+  });
+
+  function botItem(number: number): PRItem {
+    return { ...benchmarkItem(number), type: "pr", author: "dependabot[bot]" };
+  }
+
+  /** Every embedding request returns the same vector, so the two items are a
+   * duplicate pair and cluster iff they are not filtered out. */
+  function stubIdenticalEmbeddings() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (_url: string, init: any) => {
+        const body = JSON.parse(init.body);
+        const count = Array.isArray(body.input) ? body.input.length : 1;
+        return {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              data: Array.from({ length: count }, (_, i) => ({ index: i, embedding: [1, 0] })),
+            }),
+          text: () => Promise.resolve(""),
+        };
+      }),
+    );
+  }
+
+  async function countFor(includeBotAuthors: boolean | undefined): Promise<number> {
+    const tempDir = mkdtempSync(join(tmpdir(), "prism-benchmark-bots-"));
+    mkdirSync(join(tempDir, "data"));
+    process.chdir(tempDir);
+    stubIdenticalEmbeddings();
+    const result = await runBenchmarkForModel(
+      "provider/model",
+      "owner/repo",
+      [0.85],
+      [botItem(1), botItem(2)],
+      { provider: "openai", apiKey: "k", baseUrl: "https://compatible.example/v1", dimensions: 2 },
+      { includeBotAuthors },
+    );
+    return result.clustersByThreshold["0.85"];
+  }
+
+  it("excludes bot-authored items by default", async () => {
+    expect(await countFor(undefined)).toBe(0);
+  });
+
+  it("includes them when asked", async () => {
+    expect(await countFor(true)).toBe(1);
+  });
+});
