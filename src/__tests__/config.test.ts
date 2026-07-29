@@ -130,6 +130,54 @@ describe("loadEnvConfig", () => {
   });
 });
 
+describe("incident window config", () => {
+  function load(yaml: string) {
+    const dir = mkdtempSync(join(tmpdir(), "prism-incident-"));
+    const path = join(dir, "prism.config.yaml");
+    writeFileSync(path, yaml);
+    try {
+      return loadConfig(path);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const window = (extra: string) =>
+    `repo: owner/name\nincidents:\n  - start: 2026-07-23T00:00:00Z\n    end: 2026-07-24T00:00:00Z\n${extra}`;
+
+  it("accepts a well-formed window", () => {
+    const cfg = load(window("    reason: bulk close\n"));
+    expect(cfg.incidents?.[0].reason).toBe("bulk close");
+  });
+
+  it("rejects a blank reason", () => {
+    // A window is a manual override of lifecycle state. Without a reason the
+    // next person cannot tell a deliberate correction from a stray edit.
+    expect(() => load(window("    reason: ''\n"))).toThrow();
+    expect(() => load(window("    reason: '   '\n"))).toThrow();
+  });
+
+  it("rejects a missing reason", () => {
+    expect(() => load(window(""))).toThrow();
+  });
+
+  it("rejects bounds with no UTC offset", () => {
+    expect(() =>
+      load(
+        "repo: owner/name\nincidents:\n  - start: 2026-07-23T00:00:00\n    end: 2026-07-24T00:00:00Z\n    reason: x\n",
+      ),
+    ).toThrow(/offset/);
+  });
+
+  it("rejects an inverted window", () => {
+    expect(() =>
+      load(
+        "repo: owner/name\nincidents:\n  - start: 2026-07-24T00:00:00Z\n    end: 2026-07-23T00:00:00Z\n    reason: x\n",
+      ),
+    ).toThrow(/after start/);
+  });
+});
+
 describe("bot author clustering config", () => {
   function load(yaml: string) {
     const dir = mkdtempSync(join(tmpdir(), "prism-bots-"));

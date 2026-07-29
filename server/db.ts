@@ -42,8 +42,8 @@ export function openRepoDB(
   // ServerConfig has no `incidents` field and the scheduler fetches open items
   // only, so `closedAt` is never populated on this path. Wiring the App path
   // needs a config field, a scheduler that fetches closed items, and the
-  // triage.ts metadata literal fixed. Tracked separately; until then this
-  // store deliberately ranks the way it always has.
+  // triage.ts metadata literal fixed. Tracked in #27. Incident windows are the
+  // only thing missing here; other clustering behaviour is shared.
   return new VectorStore(dbPath, dimensions, model);
 }
 
