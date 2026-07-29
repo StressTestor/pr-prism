@@ -326,6 +326,7 @@ export async function runBenchmarkForModel(
           embedding: new Float32Array(embeddings[j]),
           metadata: {
             author: item.author,
+            authorIsBot: item.authorIsBot,
             state: item.state,
             labels: item.labels,
             additions: item.additions,

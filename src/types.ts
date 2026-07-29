@@ -8,6 +8,9 @@ export interface PRItem {
   body: string;
   state: string;
   author: string;
+  /** Whether GitHub reports the author as an app/bot account. undefined =
+   * scanned before this field existed (unknown); see src/bots.ts. */
+  authorIsBot?: boolean;
   createdAt: string;
   updatedAt: string;
   labels: string[];

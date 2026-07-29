@@ -129,3 +129,25 @@ describe("loadEnvConfig", () => {
     expect(() => loadEnvConfig(missingEnvPath)).toThrow(/EMBEDDING_DIMENSIONS/);
   });
 });
+
+describe("bot author clustering config", () => {
+  function load(yaml: string) {
+    const dir = mkdtempSync(join(tmpdir(), "prism-bots-"));
+    const path = join(dir, "prism.config.yaml");
+    writeFileSync(path, yaml);
+    try {
+      return loadConfig(path);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("defaults to excluding bot-authored items", () => {
+    expect(load("repo: owner/name\n").cluster.include_bot_authors).toBe(false);
+  });
+
+  it("can be opted back in", () => {
+    const cfg = load("repo: owner/name\ncluster:\n  include_bot_authors: true\n");
+    expect(cfg.cluster.include_bot_authors).toBe(true);
+  });
+});

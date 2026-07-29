@@ -331,3 +331,96 @@ describe("findDuplicateClusters", () => {
     store.close();
   });
 });
+
+describe("findDuplicateClusters bot filtering", () => {
+  const dbs: string[] = [];
+  afterEach(() => {
+    for (const db of dbs) {
+      try {
+        rmSync(resolve(db, ".."), { recursive: true, force: true });
+      } catch {}
+    }
+    dbs.length = 0;
+  });
+
+  function botPR(n: number, title: string, author: string): PRItem {
+    return { ...makePR(n, title), author };
+  }
+
+  /** Two near-identical vectors, plus a third that only matches via the second. */
+  const vec = (a: number, b: number) => new Float32Array([a, b]);
+
+  function seed(items: PRItem[], embeddings: Float32Array[]): VectorStore {
+    const db = tmpDb();
+    dbs.push(db);
+    const store = new VectorStore(db, 2);
+    items.forEach((it, i) => {
+      store.upsert(storeItem(it, embeddings[i]));
+    });
+    return store;
+  }
+
+  it("drops a bot-authored duplicate pair entirely", () => {
+    const items = [
+      botPR(1, "chore(deps): bump the npm group with 2 updates", "dependabot[bot]"),
+      botPR(2, "chore(deps): bump the npm group with 2 updates", "dependabot[bot]"),
+    ];
+    const store = seed(items, [vec(1, 0), vec(1, 0.001)]);
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    store.close();
+    expect(clusters).toHaveLength(0);
+  });
+
+  it("keeps human duplicates untouched", () => {
+    const items = [makePR(1, "fix: the thing"), makePR(2, "fix: the thing")];
+    const store = seed(items, [vec(1, 0), vec(1, 0.001)]);
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    store.close();
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].items.map((i) => i.number).sort()).toEqual([1, 2]);
+  });
+
+  it("does not let a bot item bridge two human items into one cluster", () => {
+    // The whole reason filtering has to happen before adjacency: single-linkage
+    // would otherwise chain 1-2-3 through the bot in the middle.
+    const items = [makePR(1, "human a"), botPR(2, "bot bridge", "dependabot[bot]"), makePR(3, "human b")];
+    const store = seed(items, [vec(1, 0), vec(1, 0.3), vec(1, 0.6)]);
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.9, repo: "test/repo" });
+    store.close();
+    for (const c of clusters) {
+      expect(c.items.map((i) => i.number)).not.toContain(2);
+      expect(c.items.map((i) => i.number).sort()).not.toEqual([1, 3]);
+    }
+  });
+
+  it("does not let a bot item skew a cluster's similarity stats", () => {
+    // Phase 3 averages over the component, so a bot left in the component
+    // would move avgSimilarity even after being dropped from the item list.
+    const items = [makePR(1, "same"), makePR(2, "same"), botPR(3, "same", "renovate[bot]")];
+    const store = seed(items, [vec(1, 0), vec(1, 0.001), vec(1, 0.4)]);
+    const store2 = seed(items.slice(0, 2), [vec(1, 0), vec(1, 0.001)]);
+    const withBot = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    const withoutBot = findDuplicateClusters(store2, items.slice(0, 2), {
+      threshold: 0.85,
+      repo: "test/repo",
+    });
+    store.close();
+    store2.close();
+    expect(withBot).toHaveLength(1);
+    expect(withBot[0].items).toHaveLength(2);
+    expect(withBot[0].avgSimilarity).toBeCloseTo(withoutBot[0].avgSimilarity, 6);
+    expect(withBot[0].minSimilarity).toBeCloseTo(withoutBot[0].minSimilarity, 6);
+  });
+
+  it("can be turned off", () => {
+    const items = [botPR(1, "chore(deps): bump", "dependabot[bot]"), botPR(2, "chore(deps): bump", "dependabot[bot]")];
+    const store = seed(items, [vec(1, 0), vec(1, 0.001)]);
+    const clusters = findDuplicateClusters(store, items, {
+      threshold: 0.85,
+      repo: "test/repo",
+      includeBotAuthors: true,
+    });
+    store.close();
+    expect(clusters).toHaveLength(1);
+  });
+});

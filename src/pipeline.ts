@@ -110,6 +110,7 @@ export async function reEmbedStoredItems(
 function itemMetadata(item: PRItem): Record<string, unknown> {
   return {
     author: item.author,
+    authorIsBot: item.authorIsBot,
     state: item.state,
     labels: item.labels,
     additions: item.additions,
@@ -372,7 +373,11 @@ export async function runDupes(
 
   const spinner = ora("Clustering duplicates...").start();
 
-  const clusters = findDuplicateClusters(store, items, { threshold, repo: repoFull });
+  const clusters = findDuplicateClusters(store, items, {
+    threshold,
+    repo: repoFull,
+    includeBotAuthors: config.cluster.include_bot_authors,
+  });
   spinner.succeed(`Found ${clusters.length} duplicate clusters`);
 
   if (opts.json) {
@@ -478,7 +483,11 @@ export async function runDupesMulti(
   }
 
   const spinner = ora(`Clustering duplicates across ${repos.length} repos...`).start();
-  const clusters = findDuplicateClusters(store, items, { threshold, repo: repos });
+  const clusters = findDuplicateClusters(store, items, {
+    threshold,
+    repo: repos,
+    includeBotAuthors: config.cluster.include_bot_authors,
+  });
   spinner.succeed(`Found ${clusters.length} duplicate clusters across ${repos.length} repos`);
 
   // Count cross-repo clusters
