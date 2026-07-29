@@ -51,10 +51,55 @@ const ClusterSchema = z.object({
   bot_authors: z.array(z.string().trim().min(1)).default([]),
 });
 
+/**
+ * An absolute ISO-8601 instant. The explicit offset is required, not cosmetic:
+ * `Date.parse("2026-07-23T00:00:00")` resolves in the HOST timezone, so the
+ * same config would select a different set of items on a laptop in Denver than
+ * in CI running UTC — and `"2026-07-23"` parses as UTC while
+ * `"2026-07-23T00:00:00"` parses local, so two spellings of one day disagree.
+ * Rejecting the ambiguous forms is the only way the window means one thing.
+ */
+const ISO_8601_ABSOLUTE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
+
+const AbsoluteInstant = z
+  .string()
+  // The full ISO-8601 shape, not just a trailing offset. "2026-07-23 00:00:00+00:00"
+  // has an offset but a space where the T belongs, which puts Date.parse into its
+  // implementation-defined fallback: the ambiguity this rule exists to reject.
+  .refine((s) => ISO_8601_ABSOLUTE.test(s.trim()), {
+    message: "must be an ISO-8601 instant with an explicit UTC offset (e.g. 2026-07-23T00:00:00Z or +02:00)",
+  })
+  .refine((s) => !Number.isNaN(Date.parse(s)), { message: "is not a parseable ISO-8601 timestamp" });
+
+/** A repository-wide event that closed items for reasons unrelated to their
+ * quality (visibility flip, bulk close, migration). See src/incident.ts. */
+const IncidentWindowSchema = z
+  .object({
+    /** ISO-8601 with explicit offset, inclusive. */
+    start: AbsoluteInstant,
+    /** ISO-8601 with explicit offset, exclusive. */
+    end: AbsoluteInstant,
+    reason: z.string().trim().min(1),
+  })
+  // An inverted window matches nothing and reports nothing. Fail at load
+  // instead: a silent no-op here is indistinguishable from "no incident".
+  .refine(
+    (w) => {
+      const start = Date.parse(w.start);
+      const end = Date.parse(w.end);
+      // An unparseable bound is already reported by the field rules. Claiming
+      // the ordering is wrong too would point the reader at the wrong field.
+      if (Number.isNaN(start) || Number.isNaN(end)) return true;
+      return end > start;
+    },
+    { message: "incident window end must be after start" },
+  );
+
 const ConfigSchema = z.object({
   version: z.number().optional().default(1),
   repo: z.string().optional(),
   repos: z.array(z.string()).optional(),
+  incidents: z.array(IncidentWindowSchema).optional(),
   vision_doc: z.string().optional(),
   vision_docs: z.record(z.string(), z.string()).optional(),
   thresholds: ThresholdsSchema.optional().transform((v) => ThresholdsSchema.parse(v ?? {})),

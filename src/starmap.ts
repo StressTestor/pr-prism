@@ -25,6 +25,14 @@ export interface StarmapItemRef {
   nodeId?: string;
   /** "open" | "closed" | "merged"; lets a consumer see an open dup superseded by a merged PR. */
   state?: "open" | "closed" | "merged";
+  /** Present only when true: this item was closed by a repository-wide incident
+   * (a visibility flip, a bulk close), not by a maintainer verdict. Consumers
+   * should bucket these for re-triage rather than treating them as rejected.
+   *
+   * Narrower than the internal `boolean` on PRItem deliberately: the payload
+   * omits the field entirely when false, so `true` is the only value that can
+   * appear on the wire and a consumer contract can reject anything else. */
+  incidentClosed?: true;
 }
 
 export interface StarmapItem extends StarmapItemRef {
@@ -121,6 +129,7 @@ function ref(item: {
   type: "pr" | "issue";
   nodeId?: string;
   state?: string;
+  incidentClosed?: boolean;
 }): StarmapItemRef {
   const r: StarmapItemRef = {
     repo: item.repo,
@@ -132,6 +141,8 @@ function ref(item: {
   if (item.state === "open" || item.state === "closed" || item.state === "merged") {
     r.state = item.state;
   }
+  // Omitted when false so the payload stays additive for existing consumers.
+  if (item.incidentClosed) r.incidentClosed = true;
   return r;
 }
 

@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { accountIsBot, GitHubClient, restPRState } from "../github.js";
+import { accountIsBot, GitHubClient, itemClosedAt, restPRState } from "../github.js";
 import { createWriteGate } from "../write-gate.js";
 
 function fakeOctokit() {
@@ -217,5 +218,40 @@ describe("accountIsBot", () => {
 
   it("returns undefined when the account carries no type at all", () => {
     expect(accountIsBot({})).toBeUndefined();
+  });
+});
+
+describe("itemClosedAt", () => {
+  it("reads the REST closed_at field", () => {
+    expect(itemClosedAt({ closed_at: "2026-07-23T10:18:00Z" })).toBe("2026-07-23T10:18:00Z");
+  });
+
+  it("reads the GraphQL closedAt field", () => {
+    expect(itemClosedAt({ closedAt: "2026-07-23T10:18:00Z" })).toBe("2026-07-23T10:18:00Z");
+  });
+
+  it("returns undefined for an item that is still open", () => {
+    expect(itemClosedAt({ closed_at: null })).toBeUndefined();
+  });
+});
+
+describe("closedAt wiring", () => {
+  // itemClosedAt being correct is worth nothing if a query stops asking for the
+  // field or a mapper stops calling it. Both failures are silent: every item
+  // hydrates with closedAt undefined, isIncidentClosed returns false for
+  // everything, and the whole incident feature dies with all tests green.
+  const source = readFileSync(new URL("../github.ts", import.meta.url), "utf-8");
+
+  it("both GraphQL queries still request closedAt", () => {
+    const queryBlocks = source.split("author { login __typename }").length - 1;
+    expect(queryBlocks).toBe(2);
+    expect(source.match(/^\s+closedAt$/gm)?.length).toBe(2);
+  });
+
+  it("every PRItem construction site populates closedAt", () => {
+    // Five constructors: 2 GraphQL (pr, issue), 3 REST (pr list, issue list, single pr).
+    const constructions = source.match(/author: \w+\??\.\w+\?\.login \|\| "unknown"/g) ?? [];
+    const closedAtCalls = source.match(/closedAt: itemClosedAt\(/g) ?? [];
+    expect(closedAtCalls.length).toBe(constructions.length);
   });
 });

@@ -38,6 +38,13 @@ export function openRepoDB(
   model?: string,
 ): VectorStore {
   const dbPath = getRepoDBPath(dataDir, owner, repo);
+  // NOTE: no incident windows. Incident-aware ranking is CLI-only for now:
+  // ServerConfig has no `incidents` field and the scheduler fetches open items
+  // only, so `closedAt` is never populated on this path. Wiring the App path
+  // needs a config field, a scheduler that fetches closed items, and the
+  // triage.ts metadata literal fixed. Tracked in #27. ServerConfig also has no
+  // `cluster` field, so `cluster.bot_authors` and `cluster.include_bot_authors`
+  // do not reach this path either; only the built-in bot list in bots.ts applies.
   return new VectorStore(dbPath, dimensions, model);
 }
 

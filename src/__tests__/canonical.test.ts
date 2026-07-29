@@ -359,3 +359,20 @@ describe("selectTracker (tracker substrate: original bug + role-tagged candidate
     expect(items.map((i) => i.number)).toEqual(before);
   });
 });
+
+describe("incident-closed lifecycle ranking", () => {
+  it("ranks an incident-closed PR as open, so a bulk auto-close cannot bury it under a deliberately closed sibling", () => {
+    const items = [
+      c({ number: 5559, state: "closed", incidentClosed: true, score: 0.1 }),
+      c({ number: 5560, state: "closed", score: 0.99 }),
+    ];
+
+    expect(selectCanonical(items).number).toBe(5559);
+  });
+
+  it("leaves a deliberately closed PR ranked below an open one", () => {
+    const items = [c({ number: 30, state: "closed", score: 0.99 }), c({ number: 31, state: "open", score: 0.1 })];
+
+    expect(selectCanonical(items).number).toBe(31);
+  });
+});

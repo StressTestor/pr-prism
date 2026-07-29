@@ -26,6 +26,11 @@ export interface CanonicalCandidate {
   number: number;
   /** "open" | "closed" | "merged"; absent for callers with no state (triage). */
   state?: string;
+  /** True when this item was closed by a repository-wide incident rather than
+   * by a maintainer decision. Ranked as open: a bulk auto-close says nothing
+   * about the item's quality. Same `boolean` as `PRItem.incidentClosed`, which
+   * is what gets passed in; see src/incident.ts. */
+  incidentClosed?: boolean;
   /** CI rollup; absent for callers with no CI signal (triage). Only "failure" demotes. */
   ciStatus?: "success" | "failure" | "pending" | "unknown";
 }
@@ -54,8 +59,14 @@ export interface CanonicalDecision<T> {
  * of truth, so it outranks open, which outranks a closed-unmerged PR. Absent state
  * (a triage DupeMatch has none) is 0, below every real state, so a stateless set
  * all ties here and falls through to the score/date rules unchanged.
+ *
+ * Takes the whole candidate rather than the bare state so an incident-closed
+ * item can be ranked where it sat before the incident.
  */
-function statePriority(state: string | undefined): number {
+function statePriority(candidate: { state?: string; incidentClosed?: boolean }): number {
+  // An incident-closed item never reached a maintainer verdict, so it is ranked
+  // where it sat before the incident rather than as a rejection.
+  const state = candidate.state === "closed" && candidate.incidentClosed ? "open" : candidate.state;
   switch (state) {
     case "merged":
       return 3;
@@ -84,7 +95,7 @@ function isNearTie<T extends CanonicalCandidate>(mode: "issue" | "pr", canonical
   if (mode === "pr") {
     // A different lifecycle state decided the pick (e.g. merged over open) -> a
     // clear winner, not a coin flip. Only a same-state pair is a score near-tie.
-    if (statePriority(canonical.state) !== statePriority(runnerUp.state)) return false;
+    if (statePriority(canonical) !== statePriority(runnerUp)) return false;
     // A green build chosen over a red sibling is a decisive reason, not a coin flip.
     if (ciRank(canonical.ciStatus) !== ciRank(runnerUp.ciStatus)) return false;
     return canonical.score - runnerUp.score < TIE_MARGIN;
@@ -126,7 +137,7 @@ export function decideCanonical<T extends CanonicalCandidate>(
     } else {
       // Prefer a merged PR (the real source of truth) over open over closed,
       // BEFORE score - a merged fix often does not have the top computed score.
-      const sp = statePriority(b.state) - statePriority(a.state);
+      const sp = statePriority(b) - statePriority(a);
       if (sp !== 0) return sp;
       // Then veto a known-red build: a same-state green sibling always outranks it,
       // BEFORE score, so a high quality score cannot promote a failing PR.

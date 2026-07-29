@@ -25,6 +25,16 @@ export function restPRState(pr: { state: string; merged_at?: string | null }): s
   return pr.merged_at ? "merged" : pr.state;
 }
 
+/**
+ * Normalize a close timestamp across both API shapes. REST returns snake_case
+ * `closed_at`, GraphQL returns `closedAt`; an item still open has neither.
+ * Needed so incident windows can tell a bulk auto-close apart from a
+ * maintainer's deliberate close (see src/incident.ts).
+ */
+export function itemClosedAt(raw: { closed_at?: string | null; closedAt?: string | null }): string | undefined {
+  return raw.closed_at ?? raw.closedAt ?? undefined;
+}
+
 /** GraphQL closingIssuesReferences -> same-repo issue numbers. Cross-repo closing
  * refs are dropped: keeping only the bare number would alias another repo's issue
  * onto this repo's numbering and fabricate closing edges. A fetched PR with no
@@ -195,6 +205,7 @@ export class GitHubClient {
                   author { login __typename }
                   createdAt
                   updatedAt
+                  closedAt
                   additions
                   deletions
                   changedFiles
@@ -261,6 +272,7 @@ export class GitHubClient {
           author: pr.author?.login || "unknown",
           authorIsBot: accountIsBot(pr.author),
           createdAt: pr.createdAt,
+          closedAt: itemClosedAt(pr),
           nodeId: pr.id,
           headRefOid: pr.headRefOid,
           updatedAt: pr.updatedAt,
@@ -316,6 +328,7 @@ export class GitHubClient {
                   author { login __typename }
                   createdAt
                   updatedAt
+                  closedAt
                   labels(first: 20) { nodes { name } }
                 }
               }
@@ -354,6 +367,7 @@ export class GitHubClient {
           author: issue.author?.login || "unknown",
           authorIsBot: accountIsBot(issue.author),
           createdAt: issue.createdAt,
+          closedAt: itemClosedAt(issue),
           nodeId: issue.id,
           updatedAt: issue.updatedAt,
           labels: (issue.labels?.nodes || []).map((l: any) => l.name),
@@ -430,6 +444,7 @@ export class GitHubClient {
           author: pr.user?.login || "unknown",
           authorIsBot: accountIsBot(pr.user),
           createdAt: pr.created_at,
+          closedAt: itemClosedAt(pr),
           nodeId: pr.node_id,
           headRefOid: pr.head?.sha,
           updatedAt: pr.updated_at,
@@ -488,6 +503,7 @@ export class GitHubClient {
           author: issue.user?.login || "unknown",
           authorIsBot: accountIsBot(issue.user),
           createdAt: issue.created_at,
+          closedAt: itemClosedAt(issue),
           nodeId: issue.node_id,
           updatedAt: issue.updated_at,
           labels: issue.labels.map((l) => (typeof l === "string" ? l : l.name || "")),
@@ -523,6 +539,7 @@ export class GitHubClient {
       author: pr.user?.login || "unknown",
       authorIsBot: accountIsBot(pr.user),
       createdAt: pr.created_at,
+      closedAt: itemClosedAt(pr),
       updatedAt: pr.updated_at,
       labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name || "")),
       diffUrl: pr.diff_url,

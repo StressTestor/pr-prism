@@ -130,6 +130,86 @@ describe("loadEnvConfig", () => {
   });
 });
 
+describe("incident window config", () => {
+  function load(yaml: string) {
+    const dir = mkdtempSync(join(tmpdir(), "prism-incident-"));
+    const path = join(dir, "prism.config.yaml");
+    writeFileSync(path, yaml);
+    try {
+      return loadConfig(path);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const window = (extra: string) =>
+    `repo: owner/name\nincidents:\n  - start: 2026-07-23T00:00:00Z\n    end: 2026-07-24T00:00:00Z\n${extra}`;
+
+  it("accepts a well-formed window", () => {
+    const cfg = load(window("    reason: bulk close\n"));
+    expect(cfg.incidents?.[0].reason).toBe("bulk close");
+  });
+
+  it("rejects a blank reason", () => {
+    // A window is a manual override of lifecycle state. Without a reason the
+    // next person cannot tell a deliberate correction from a stray edit.
+    expect(() => load(window("    reason: ''\n"))).toThrow();
+    expect(() => load(window("    reason: '   '\n"))).toThrow();
+  });
+
+  it("rejects a missing reason", () => {
+    expect(() => load(window(""))).toThrow();
+  });
+
+  it("rejects bounds with no UTC offset", () => {
+    expect(() =>
+      load(
+        "repo: owner/name\nincidents:\n  - start: 2026-07-23T00:00:00\n    end: 2026-07-24T00:00:00Z\n    reason: x\n",
+      ),
+    ).toThrow(/offset/);
+  });
+
+  it("rejects a bound that has an offset but is not a real instant", () => {
+    // Isolates the parseability rule: the offset rule passes, Date.parse does
+    // not. "last tuesday" trips the offset rule first and proves nothing.
+    expect(() =>
+      load(
+        "repo: owner/name\nincidents:\n  - start: 2026-13-45T00:00:00Z\n    end: 2026-07-24T00:00:00Z\n    reason: x\n",
+      ),
+    ).toThrow(/parseable/);
+  });
+
+  it("rejects the space-separated form, which parses per-engine", () => {
+    // `2026-07-23 00:00:00+00:00` is not ISO-8601; Date.parse falls back to
+    // implementation-defined behaviour, the ambiguity this schema exists to reject.
+    expect(() =>
+      load(
+        "repo: owner/name\nincidents:\n  - start: '2026-07-23 00:00:00+00:00'\n    end: 2026-07-24T00:00:00Z\n    reason: x\n",
+      ),
+    ).toThrow();
+  });
+
+  it("does not blame ordering when a bound is unparseable", () => {
+    // Reporting "end must be after start" for a bound that never parsed sends
+    // the reader to the wrong field.
+    let message = "";
+    try {
+      load("repo: owner/name\nincidents:\n  - start: last tuesday\n    end: 2026-07-24T00:00:00Z\n    reason: x\n");
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).not.toMatch(/after start/);
+  });
+
+  it("rejects an inverted window", () => {
+    expect(() =>
+      load(
+        "repo: owner/name\nincidents:\n  - start: 2026-07-24T00:00:00Z\n    end: 2026-07-23T00:00:00Z\n    reason: x\n",
+      ),
+    ).toThrow(/after start/);
+  });
+});
+
 describe("bot author clustering config", () => {
   function load(yaml: string) {
     const dir = mkdtempSync(join(tmpdir(), "prism-bots-"));

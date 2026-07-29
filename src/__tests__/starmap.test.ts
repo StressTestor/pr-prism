@@ -302,3 +302,18 @@ describe("confirmed clusters in the starmap payload", () => {
     expect(buildStarmapPayload(clusters, META).clusters[0].canonical.number).toBe(10);
   });
 });
+
+describe("incident-closed in the starmap payload", () => {
+  it("flags an incident-closed item so a consumer can bucket it apart from a rejection", () => {
+    const items = [
+      item(5559, "pr", 0.9, { state: "closed", incidentClosed: true }),
+      item(5560, "pr", 0.8, { state: "closed" }),
+    ];
+
+    const payload = buildStarmapPayload([cluster(1, items, 0.93, 0.91)], META);
+    const refs = payload.clusters[0].items;
+
+    expect(refs.find((r) => r.number === 5559)?.incidentClosed).toBe(true);
+    expect(refs.find((r) => r.number === 5560)?.incidentClosed).toBeUndefined();
+  });
+});
