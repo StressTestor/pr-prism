@@ -2,11 +2,23 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
-import { type IncidentWindow, isIncidentClosed } from "./incident.js";
+import {
+  type CompiledIncidentWindow,
+  compileIncidentWindows,
+  type IncidentWindow,
+  isIncidentClosed,
+} from "./incident.js";
 import type { StoreItem } from "./types.js";
+
+/** Named so the constructor tail stays one argument as more knobs arrive,
+ * rather than growing another positional parameter each time. */
+export interface VectorStoreOptions {
+  incidentWindows?: readonly IncidentWindow[];
+}
 
 export class VectorStore {
   private db: Database.Database;
+  private incidentWindows: readonly CompiledIncidentWindow[];
   private dimensions: number;
   private embeddingModel?: string;
 
@@ -16,8 +28,11 @@ export class VectorStore {
     embeddingModel?: string,
     /** Repository-wide events that closed items for non-quality reasons.
      * Applied at read time so a corrected window needs no rescan. */
-    private incidentWindows: readonly IncidentWindow[] = [],
+    options: VectorStoreOptions = {},
   ) {
+    // Compiled here rather than per item: a malformed window throws now instead
+    // of quietly matching nothing on every read.
+    this.incidentWindows = compileIncidentWindows(options.incidentWindows ?? []);
     const p = dbPath || resolve(process.cwd(), "data", "prism.db");
     mkdirSync(resolve(p, ".."), { recursive: true });
     this.db = new Database(p);

@@ -13,6 +13,7 @@ import {
 } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { applyLabelActions, ensureLabelsExist, type LabelAction } from "./labels.js";
+import { itemMetadata } from "./metadata.js";
 import { classifyClusterRelation } from "./relations.js";
 import { escapeTableCell, sanitizeTitle } from "./sanitize.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
@@ -65,7 +66,9 @@ export async function createPipelineContext(repoOverride?: string): Promise<Pipe
     baseUrl: env.EMBEDDING_BASE_URL,
     dimensions: env.EMBEDDING_DIMENSIONS,
   });
-  const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL, config.incidents ?? []);
+  const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL, {
+    incidentWindows: config.incidents ?? [],
+  });
   return { config, env, owner, repo, repoFull, github, store, embedder };
 }
 
@@ -106,28 +109,6 @@ export async function reEmbedStoredItems(
   store.setMeta("embedding_provider", providerConfig.provider);
   store.setMeta("embedding_config_hash", effectiveEmbeddingConfigHash(providerConfig, embedder.dimensions));
   store.setMeta("schema_version", "1");
-}
-
-/** Single source for an item's stored metadata: used for both new-item upserts
- * and the unchanged-item refresh, so drifting fields can never diverge. */
-export function itemMetadata(item: PRItem): Record<string, unknown> {
-  return {
-    author: item.author,
-    authorIsBot: item.authorIsBot,
-    state: item.state,
-    closedAt: item.closedAt,
-    labels: item.labels,
-    additions: item.additions,
-    deletions: item.deletions,
-    changedFiles: item.changedFiles,
-    ciStatus: item.ciStatus,
-    reviewCount: item.reviewCount,
-    hasTests: item.hasTests,
-    bodyLength: item.body.length,
-    nodeId: item.nodeId,
-    headRefOid: item.headRefOid,
-    closesIssues: item.closesIssues,
-  };
 }
 
 export async function runScan(

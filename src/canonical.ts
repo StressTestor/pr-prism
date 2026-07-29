@@ -28,7 +28,8 @@ export interface CanonicalCandidate {
   state?: string;
   /** True when this item was closed by a repository-wide incident rather than
    * by a maintainer decision. Ranked as open: a bulk auto-close says nothing
-   * about the item's quality. See src/incident.ts. */
+   * about the item's quality. Same `boolean` as `PRItem.incidentClosed`, which
+   * is what gets passed in; see src/incident.ts. */
   incidentClosed?: boolean;
   /** CI rollup; absent for callers with no CI signal (triage). Only "failure" demotes. */
   ciStatus?: "success" | "failure" | "pending" | "unknown";

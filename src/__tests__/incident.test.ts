@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config.js";
-import { isIncidentClosed } from "../incident.js";
-import { itemMetadata } from "../pipeline.js";
+import { compileIncidentWindows, isIncidentClosed } from "../incident.js";
+import { itemMetadata } from "../metadata.js";
 
 const INCIDENT = {
   start: "2026-07-23T00:00:00Z",
@@ -16,7 +16,7 @@ describe("isIncidentClosed", () => {
   it("classifies a PR closed inside an incident window as incident-closed", () => {
     const item = { state: "closed", closedAt: "2026-07-23T10:18:00Z" };
 
-    expect(isIncidentClosed(item, [INCIDENT])).toBe(true);
+    expect(isIncidentClosed(item, compileIncidentWindows([INCIDENT]))).toBe(true);
   });
 });
 
@@ -88,5 +88,39 @@ describe("incident window validation", () => {
     const path = writeConfig('  - start: "2026-07-24T00:00:00Z"\n    end: "2026-07-23T00:00:00Z"\n    reason: "x"\n');
 
     expect(() => loadConfig(path)).toThrow(/end/i);
+  });
+});
+
+describe("compileIncidentWindows", () => {
+  it("rejects an unparseable bound instead of skipping the window", () => {
+    // Config validation catches this on the CLI path, but VectorStore accepts
+    // windows from any caller. Silently ignoring a malformed window is the
+    // same no-op the config layer exists to prevent, just later and quieter.
+    expect(() => compileIncidentWindows([{ start: "nonsense", end: "2026-07-24T00:00:00Z", reason: "x" }])).toThrow(
+      /nonsense/,
+    );
+  });
+
+  it("rejects an inverted window", () => {
+    expect(() =>
+      compileIncidentWindows([{ start: "2026-07-24T00:00:00Z", end: "2026-07-23T00:00:00Z", reason: "x" }]),
+    ).toThrow(/after its start/);
+  });
+
+  it("names the offending window so a long list is searchable", () => {
+    expect(() =>
+      compileIncidentWindows([
+        { start: "2026-07-23T00:00:00Z", end: "2026-07-24T00:00:00Z", reason: "fine" },
+        { start: "broken", end: "2026-07-24T00:00:00Z", reason: "the bad one" },
+      ]),
+    ).toThrow(/the bad one/);
+  });
+
+  it("parses bounds once, so matching does not re-parse per item", () => {
+    const [w] = compileIncidentWindows([
+      { start: "2026-07-23T09:00:00Z", end: "2026-07-23T11:00:00Z", reason: "flip" },
+    ]);
+    expect(w.start).toBe(Date.parse("2026-07-23T09:00:00Z"));
+    expect(w.end).toBe(Date.parse("2026-07-23T11:00:00Z"));
   });
 });

@@ -27,7 +27,11 @@ export interface StarmapItemRef {
   state?: "open" | "closed" | "merged";
   /** Present only when true: this item was closed by a repository-wide incident
    * (a visibility flip, a bulk close), not by a maintainer verdict. Consumers
-   * should bucket these for re-triage rather than treating them as rejected. */
+   * should bucket these for re-triage rather than treating them as rejected.
+   *
+   * Narrower than the internal `boolean` on PRItem deliberately: the payload
+   * omits the field entirely when false, so `true` is the only value that can
+   * appear on the wire and a consumer contract can reject anything else. */
   incidentClosed?: true;
 }
 

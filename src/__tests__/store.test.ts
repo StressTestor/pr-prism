@@ -339,9 +339,9 @@ describe("closesIssues metadata round-trip", () => {
   it("marks items closed inside a configured incident window", () => {
     const path = tmpDb();
     dbs.push(path);
-    const store = new VectorStore(path, 4, undefined, [
-      { start: "2026-07-23T00:00:00Z", end: "2026-07-24T00:00:00Z", reason: "visibility flip" },
-    ]);
+    const store = new VectorStore(path, 4, undefined, {
+      incidentWindows: [{ start: "2026-07-23T00:00:00Z", end: "2026-07-24T00:00:00Z", reason: "visibility flip" }],
+    });
     const base = {
       type: "pr" as const,
       repo: "odysseus-dev/odysseus",
@@ -377,9 +377,9 @@ describe("closesIssues metadata round-trip", () => {
     // invisible from the single-repo tests above.
     const path = tmpDb();
     dbs.push(path);
-    const store = new VectorStore(path, 4, undefined, [
-      { start: "2026-07-23T00:00:00Z", end: "2026-07-24T00:00:00Z", reason: "visibility flip" },
-    ]);
+    const store = new VectorStore(path, 4, undefined, {
+      incidentWindows: [{ start: "2026-07-23T00:00:00Z", end: "2026-07-24T00:00:00Z", reason: "visibility flip" }],
+    });
     const base = {
       type: "pr" as const,
       title: "t",

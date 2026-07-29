@@ -1,8 +1,8 @@
-import { itemMetadata } from "../src/pipeline.js";
 import cron from "node-cron";
 import { findDuplicateClusters } from "../src/cluster.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "../src/embeddings.js";
 import { GitHubClient } from "../src/github.js";
+import { itemMetadata } from "../src/metadata.js";
 import { escapeTableCell } from "../src/sanitize.js";
 import type { Cluster, PRItem, StoreItem } from "../src/types.js";
 import {
