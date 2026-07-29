@@ -314,3 +314,29 @@ describe("closesIssues metadata round-trip", () => {
     store.close();
   });
 });
+
+describe("bot authorship round-trip", () => {
+  it("survives a store write and read, so filtering does not need a rescan", () => {
+    const db = tmpDb();
+    const store = new VectorStore(db, 2);
+    store.upsert({
+      id: "test/repo:pr:1",
+      type: "pr",
+      number: 1,
+      repo: "test/repo",
+      title: "chore(deps): bump",
+      bodySnippet: "b",
+      embedding: new Float32Array([1, 0]),
+      metadata: { author: "dependabot[bot]", authorIsBot: true, state: "open", labels: [] },
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+    const [read] = store.getAllItems("test/repo") as unknown as Array<{
+      author: string;
+      authorIsBot?: boolean;
+    }>;
+    store.close();
+    expect(read.author).toBe("dependabot[bot]");
+    expect(read.authorIsBot).toBe(true);
+  });
+});

@@ -30,6 +30,20 @@ export function restPRState(pr: { state: string; merged_at?: string | null }): s
  * onto this repo's numbering and fabricate closing edges. A fetched PR with no
  * refs is known-empty ([]), never undefined — undefined is reserved for
  * pre-upgrade rows where the field was never scanned. */
+/**
+ * Whether a GitHub account is an app, from whichever field the API used:
+ * GraphQL reports `__typename`, REST reports `type`.
+ *
+ * Returns undefined when GitHub gave no account (a deleted user) or no type,
+ * because that is unknown, not "human" — recording false would suppress the
+ * login fallback in src/bots.ts and assert something never observed.
+ */
+export function accountIsBot(account: { __typename?: string; type?: string } | null | undefined): boolean | undefined {
+  const kind = account?.__typename ?? account?.type;
+  if (kind === undefined) return undefined;
+  return kind === "Bot";
+}
+
 export function mapClosingIssues(
   refs: { nodes?: Array<{ number: number; repository?: { nameWithOwner: string } }> } | null | undefined,
   repoFull: string,
@@ -178,7 +192,7 @@ export class GitHubClient {
                   title
                   body
                   state
-                  author { login }
+                  author { login __typename }
                   createdAt
                   updatedAt
                   additions
@@ -245,6 +259,7 @@ export class GitHubClient {
           body: pr.body || "",
           state: pr.state.toLowerCase(),
           author: pr.author?.login || "unknown",
+          authorIsBot: accountIsBot(pr.author),
           createdAt: pr.createdAt,
           nodeId: pr.id,
           headRefOid: pr.headRefOid,
@@ -298,7 +313,7 @@ export class GitHubClient {
                   title
                   body
                   state
-                  author { login }
+                  author { login __typename }
                   createdAt
                   updatedAt
                   labels(first: 20) { nodes { name } }
@@ -337,6 +352,7 @@ export class GitHubClient {
           body: issue.body || "",
           state: issue.state.toLowerCase(),
           author: issue.author?.login || "unknown",
+          authorIsBot: accountIsBot(issue.author),
           createdAt: issue.createdAt,
           nodeId: issue.id,
           updatedAt: issue.updatedAt,
@@ -412,6 +428,7 @@ export class GitHubClient {
           body: pr.body || "",
           state: restPRState(pr),
           author: pr.user?.login || "unknown",
+          authorIsBot: accountIsBot(pr.user),
           createdAt: pr.created_at,
           nodeId: pr.node_id,
           headRefOid: pr.head?.sha,
@@ -469,6 +486,7 @@ export class GitHubClient {
           body: issue.body || "",
           state: issue.state,
           author: issue.user?.login || "unknown",
+          authorIsBot: accountIsBot(issue.user),
           createdAt: issue.created_at,
           nodeId: issue.node_id,
           updatedAt: issue.updated_at,
@@ -503,6 +521,7 @@ export class GitHubClient {
       body: pr.body || "",
       state: restPRState(pr),
       author: pr.user?.login || "unknown",
+      authorIsBot: accountIsBot(pr.user),
       createdAt: pr.created_at,
       updatedAt: pr.updated_at,
       labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name || "")),

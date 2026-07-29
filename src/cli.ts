@@ -488,6 +488,8 @@ program
         const clusters = findDuplicateClusters(ctx.store, items, {
           threshold,
           repo: isMultiRepo ? repos : ctx.repoFull,
+          includeBotAuthors: ctx.config.cluster.include_bot_authors,
+          botAuthors: new Set(ctx.config.cluster.bot_authors),
         });
         const cluster = clusters.find((c) => c.id === parseInt(opts.cluster, 10));
         if (!cluster) {
@@ -544,7 +546,11 @@ program
           const allItems = (isMultiRepo
             ? ctx.store.getAllItemsMulti(repos)
             : ctx.store.getAllItems(ctx.repoFull)) as unknown as PRItem[];
-          const confirmed = findConfirmedDuplicates(allItems, { store: ctx.store });
+          const confirmed = findConfirmedDuplicates(allItems, {
+            store: ctx.store,
+            includeBotAuthors: ctx.config.cluster.include_bot_authors,
+            botAuthors: new Set(ctx.config.cluster.bot_authors),
+          });
           const payload = buildStarmapPayload(
             clusters,
             {
@@ -566,7 +572,11 @@ program
           const allItems = (isMultiRepo
             ? ctx.store.getAllItemsMulti(repos)
             : ctx.store.getAllItems(ctx.repoFull)) as unknown as PRItem[];
-          const confirmed = findConfirmedDuplicates(allItems, { store: ctx.store });
+          const confirmed = findConfirmedDuplicates(allItems, {
+            store: ctx.store,
+            includeBotAuthors: ctx.config.cluster.include_bot_authors,
+            botAuthors: new Set(ctx.config.cluster.bot_authors),
+          });
           const manifest = buildHousekeepingManifest(clusters, {
             repo: isMultiRepo ? repos.join(", ") : ctx.repoFull,
             confirmed,
@@ -913,6 +923,7 @@ program
   .option("--models <models>", "Comma-separated embedding models to compare", "nomic-embed-text,qwen3-embedding:0.6b")
   .option("--thresholds <thresholds>", "Comma-separated similarity thresholds", "0.82,0.85")
   .option("--out <path>", "Results file for this run (default: data/benchmark-results.json)")
+  .option("--include-bot-authors", "Cluster bot-authored items too (excluded by default)")
   .action(async (opts) => {
     await runBenchmark({
       repo: opts.repo,
@@ -922,6 +933,7 @@ program
       models: opts.models,
       thresholds: opts.thresholds,
       out: opts.out,
+      includeBotAuthors: opts.includeBotAuthors,
     });
   });
 
@@ -1118,6 +1130,8 @@ program
     const clusters = findDuplicateClusters(store, items, {
       threshold: config.thresholds.duplicate_similarity,
       repo: repoFull,
+      includeBotAuthors: config.cluster.include_bot_authors,
+      botAuthors: new Set(config.cluster.bot_authors),
     });
     const dupeItemCount = clusters.reduce((s, c) => s + c.items.length, 0);
 

@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { findDuplicateClusters } from "../cluster.js";
 import { VectorStore } from "../store.js";
 import type { PRItem, StoreItem } from "../types.js";
@@ -329,5 +329,153 @@ describe("findDuplicateClusters", () => {
     const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
     expect(clusters).toEqual([]);
     store.close();
+  });
+});
+
+describe("findDuplicateClusters bot filtering", () => {
+  const dbs: string[] = [];
+  afterEach(() => {
+    for (const db of dbs) {
+      try {
+        rmSync(resolve(db, ".."), { recursive: true, force: true });
+      } catch {}
+    }
+    dbs.length = 0;
+  });
+
+  function botPR(n: number, title: string, author: string): PRItem {
+    return { ...makePR(n, title), author };
+  }
+
+  /** Two near-identical vectors, plus a third that only matches via the second. */
+  const vec = (a: number, b: number) => new Float32Array([a, b]);
+
+  function seed(items: PRItem[], embeddings: Float32Array[]): VectorStore {
+    const db = tmpDb();
+    dbs.push(db);
+    const store = new VectorStore(db, 2);
+    items.forEach((it, i) => {
+      store.upsert(storeItem(it, embeddings[i]));
+    });
+    return store;
+  }
+
+  it("drops a bot-authored duplicate pair entirely", () => {
+    const items = [
+      botPR(1, "chore(deps): bump the npm group with 2 updates", "dependabot[bot]"),
+      botPR(2, "chore(deps): bump the npm group with 2 updates", "dependabot[bot]"),
+    ];
+    const store = seed(items, [vec(1, 0), vec(1, 0.001)]);
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    store.close();
+    expect(clusters).toHaveLength(0);
+  });
+
+  it("keeps human duplicates untouched", () => {
+    const items = [makePR(1, "fix: the thing"), makePR(2, "fix: the thing")];
+    const store = seed(items, [vec(1, 0), vec(1, 0.001)]);
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    store.close();
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].items.map((i) => i.number).sort()).toEqual([1, 2]);
+  });
+
+  it("does not let a bot item bridge two human items into one cluster", () => {
+    // The whole reason filtering has to happen before adjacency: single-linkage
+    // would otherwise chain 1-2-3 through the bot in the middle.
+    const items = [makePR(1, "human a"), botPR(2, "bot bridge", "dependabot[bot]"), makePR(3, "human b")];
+    const store = seed(items, [vec(1, 0), vec(1, 0.3), vec(1, 0.6)]);
+    const clusters = findDuplicateClusters(store, items, { threshold: 0.9, repo: "test/repo" });
+    store.close();
+    for (const c of clusters) {
+      expect(c.items.map((i) => i.number)).not.toContain(2);
+      expect(c.items.map((i) => i.number).sort()).not.toEqual([1, 3]);
+    }
+  });
+
+  it("does not let a bot item skew a cluster's similarity stats", () => {
+    // Phase 3 averages over the component, so a bot left in the component
+    // would move avgSimilarity even after being dropped from the item list.
+    const items = [makePR(1, "same"), makePR(2, "same"), botPR(3, "same", "renovate[bot]")];
+    const store = seed(items, [vec(1, 0), vec(1, 0.001), vec(1, 0.4)]);
+    const store2 = seed(items.slice(0, 2), [vec(1, 0), vec(1, 0.001)]);
+    const withBot = findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    const withoutBot = findDuplicateClusters(store2, items.slice(0, 2), {
+      threshold: 0.85,
+      repo: "test/repo",
+    });
+    store.close();
+    store2.close();
+    expect(withBot).toHaveLength(1);
+    expect(withBot[0].items).toHaveLength(2);
+    expect(withBot[0].avgSimilarity).toBeCloseTo(withoutBot[0].avgSimilarity, 6);
+    expect(withBot[0].minSimilarity).toBeCloseTo(withoutBot[0].minSimilarity, 6);
+  });
+
+  it("can be turned off", () => {
+    const items = [botPR(1, "chore(deps): bump", "dependabot[bot]"), botPR(2, "chore(deps): bump", "dependabot[bot]")];
+    const store = seed(items, [vec(1, 0), vec(1, 0.001)]);
+    const clusters = findDuplicateClusters(store, items, {
+      threshold: 0.85,
+      repo: "test/repo",
+      includeBotAuthors: true,
+    });
+    store.close();
+    expect(clusters).toHaveLength(1);
+  });
+});
+
+describe("findDuplicateClusters exclusion scope", () => {
+  const dbs: string[] = [];
+  afterEach(() => {
+    for (const db of dbs) {
+      try {
+        rmSync(resolve(db, ".."), { recursive: true, force: true });
+      } catch {}
+    }
+    dbs.length = 0;
+  });
+
+  it("only bot items are removed, not every store row missing from `items`", () => {
+    // Bot filtering must not quietly change how the clusterer treats store
+    // rows the caller did not pass in; that is a separate behaviour.
+    const db = tmpDb();
+    dbs.push(db);
+    const store = new VectorStore(db, 2);
+    // #1 and #2 are too far apart to link directly; #3 sits between them and
+    // bridges the two under single-linkage.
+    const inStore = [makePR(1, "a"), makePR(2, "b"), makePR(3, "bridge")];
+    const embs = [new Float32Array([1, 0]), new Float32Array([1, 0.6]), new Float32Array([1, 0.3])];
+    inStore.forEach((it, i) => {
+      store.upsert(storeItem(it, embs[i]));
+    });
+    // Caller passes only #1 and #2; #3 is a store row it did not hand over.
+    const clusters = findDuplicateClusters(store, [inStore[0], inStore[1]], {
+      threshold: 0.9,
+      repo: "test/repo",
+    });
+    store.close();
+    // Unchanged from before bot filtering: #3 still bridges, so #1 and #2 land
+    // in one cluster and #3 is simply absent from its item list.
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].items.map((i) => i.number).sort()).toEqual([1, 2]);
+  });
+
+  it("does not count bot items in the zero-vector warning", () => {
+    const db = tmpDb();
+    dbs.push(db);
+    const store = new VectorStore(db, 2);
+    const items = [makePR(1, "a"), makePR(2, "b"), { ...makePR(3, "bot"), author: "dependabot[bot]" }];
+    store.upsert(storeItem(items[0], new Float32Array([1, 0])));
+    store.upsert(storeItem(items[1], new Float32Array([1, 0.001])));
+    store.upsert(storeItem(items[2], new Float32Array([0, 0])));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    findDuplicateClusters(store, items, { threshold: 0.85, repo: "test/repo" });
+    store.close();
+    const warned = warn.mock.calls.map((c) => String(c[0])).join("\n");
+    warn.mockRestore();
+    // The only zero vector belongs to an excluded bot, so there is nothing to
+    // tell the user about.
+    expect(warned).not.toMatch(/zero-vector/);
   });
 });

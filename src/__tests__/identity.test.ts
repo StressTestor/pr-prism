@@ -108,3 +108,41 @@ describe("identity canonical is which-was-first", () => {
     expect(clusters[0].bestPick.number).toBe(100);
   });
 });
+
+describe("findConfirmedDuplicates bot filtering", () => {
+  it("does not confirm a bot-authored pair sharing a head OID", () => {
+    // Two dependabot PRs can share a head OID after a rebase-and-refile; that
+    // is automation repeating itself, not a duplicate a maintainer resolves.
+    const groups = findConfirmedDuplicates([
+      pr(1, { headRefOid: "abc123", author: "dependabot[bot]" }),
+      pr(2, { headRefOid: "abc123", author: "dependabot[bot]" }),
+    ]);
+    expect(groups).toHaveLength(0);
+  });
+
+  it("still confirms human pairs", () => {
+    const groups = findConfirmedDuplicates([pr(1, { headRefOid: "abc123" }), pr(2, { headRefOid: "abc123" })]);
+    expect(groups).toHaveLength(1);
+  });
+
+  it("does not let a bot join a human identity group", () => {
+    const groups = findConfirmedDuplicates([
+      pr(1, { headRefOid: "abc123" }),
+      pr(2, { headRefOid: "abc123" }),
+      pr(3, { headRefOid: "abc123", author: "renovate[bot]" }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items.map((i) => i.number).sort()).toEqual([1, 2]);
+  });
+
+  it("can be turned off", () => {
+    const groups = findConfirmedDuplicates(
+      [
+        pr(1, { headRefOid: "abc123", author: "dependabot[bot]" }),
+        pr(2, { headRefOid: "abc123", author: "dependabot[bot]" }),
+      ],
+      { includeBotAuthors: true },
+    );
+    expect(groups).toHaveLength(1);
+  });
+});

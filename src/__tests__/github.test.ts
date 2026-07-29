@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubClient, restPRState } from "../github.js";
+import { accountIsBot, GitHubClient, restPRState } from "../github.js";
 import { createWriteGate } from "../write-gate.js";
 
 function fakeOctokit() {
@@ -194,5 +194,28 @@ describe("mapClosingIssues", () => {
     expect(mapClosingIssues({ nodes: [] }, repo)).toEqual([]);
     expect(mapClosingIssues(null, repo)).toEqual([]);
     expect(mapClosingIssues(undefined, repo)).toEqual([]);
+  });
+});
+
+describe("accountIsBot", () => {
+  it("reads GitHub's GraphQL account type", () => {
+    expect(accountIsBot({ __typename: "Bot" })).toBe(true);
+    expect(accountIsBot({ __typename: "User" })).toBe(false);
+  });
+
+  it("reads GitHub's REST account type", () => {
+    expect(accountIsBot({ type: "Bot" })).toBe(true);
+    expect(accountIsBot({ type: "User" })).toBe(false);
+  });
+
+  it("returns undefined for a missing account rather than claiming human", () => {
+    // GitHub returns no author for a deleted account. Recording `false` there
+    // asserts "definitely a person" and suppresses the login fallback.
+    expect(accountIsBot(null)).toBeUndefined();
+    expect(accountIsBot(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined when the account carries no type at all", () => {
+    expect(accountIsBot({})).toBeUndefined();
   });
 });

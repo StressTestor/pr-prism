@@ -34,6 +34,23 @@ const LabelsSchema = z.object({
   top_pick: z.string().default("prism:top-pick"),
 });
 
+/** Clustering behaviour that is not a similarity threshold. */
+const ClusterSchema = z.object({
+  /**
+   * Cluster bot-authored items too. Off by default: automation reuses titles
+   * for unrelated content (dependabot files the same "bump the npm group"
+   * title weekly), so consecutive bot PRs embed as near-identical and surface
+   * as duplicates no maintainer can act on.
+   */
+  include_bot_authors: z.boolean().default(false),
+  /**
+   * Extra bot logins for this repo, added to the built-in list. A
+   * self-hosted or org-specific bot is invisible to pr-prism otherwise, and
+   * the only alternative would be turning bot filtering off entirely.
+   */
+  bot_authors: z.array(z.string().trim().min(1)).default([]),
+});
+
 const ConfigSchema = z.object({
   version: z.number().optional().default(1),
   repo: z.string().optional(),
@@ -46,6 +63,7 @@ const ConfigSchema = z.object({
     .optional()
     .transform((v) => v ?? { weights: ScoringWeightsSchema.parse({}) }),
   labels: LabelsSchema.optional().transform((v) => LabelsSchema.parse(v ?? {})),
+  cluster: ClusterSchema.optional().transform((v) => ClusterSchema.parse(v ?? {})),
   batch_size: z.number().default(50),
   max_prs: z.number().default(5000),
 });
