@@ -5,6 +5,7 @@
 // clusters. Cheap and exact: no model, no threshold.
 
 import { createHash } from "node:crypto";
+import { isBotAuthor } from "./bots.js";
 import { selectCanonical } from "./canonical.js";
 import { scoreClusterItem } from "./cluster.js";
 import type { VectorStore } from "./store.js";
@@ -64,8 +65,14 @@ function makeIdentityCluster(members: PRItem[], identity: { basis: "head-oid" | 
  * fingerprint when a store with cached diffs is supplied. Emits only groups of
  * size >= 2, in sorted-key order so output is deterministic.
  */
-export function findConfirmedDuplicates(items: PRItem[], opts?: { store?: VectorStore }): Cluster[] {
-  const prs = items.filter((i) => i.type === "pr");
+export function findConfirmedDuplicates(
+  items: PRItem[],
+  opts?: { store?: VectorStore; includeBotAuthors?: boolean; botAuthors?: ReadonlySet<string> },
+): Cluster[] {
+  // Automation can refile the same head OID after a rebase. That is a bot
+  // repeating itself, not a duplicate anyone resolves, so it is excluded on
+  // the same terms as the fuzzy path.
+  const prs = items.filter((i) => i.type === "pr" && (opts?.includeBotAuthors || !isBotAuthor(i, opts?.botAuthors)));
   const groups: Cluster[] = [];
   const claimed = new Set<string>();
 

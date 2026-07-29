@@ -37,15 +37,31 @@ const KNOWN_BOT_LOGINS: ReadonlySet<string> = new Set([
  * existed — matching how `closesIssues` treats absent as unknown rather than
  * as a negative answer.
  */
-export function isBotAuthor(item: Pick<PRItem, "author" | "authorIsBot">): boolean {
+export function isBotAuthor(
+  item: Pick<PRItem, "author" | "authorIsBot">,
+  extraBotLogins?: ReadonlySet<string>,
+): boolean {
   if (item.authorIsBot !== undefined) return item.authorIsBot;
 
-  // Strip the `app/` prefix the gh CLI displays, then the `[bot]` suffix REST
-  // appends. Matching whole logins only: "dependabot-fan" is a person.
-  const login = item.author
+  const login = normalizeLogin(item.author);
+  // The `[bot]` suffix REST appends is conclusive on its own.
+  if (login.endsWith("[bot]")) return true;
+  if (KNOWN_BOT_LOGINS.has(login)) return true;
+  if (!extraBotLogins) return false;
+  for (const configured of extraBotLogins) {
+    if (normalizeLogin(configured) === login) return true;
+  }
+  return false;
+}
+
+/**
+ * Strips the `app/` prefix the gh CLI displays and lowercases, so a configured
+ * login matches whatever spelling the scan happened to record. Whole logins
+ * only: "dependabot-fan" is a person.
+ */
+function normalizeLogin(login: string): string {
+  return login
     .trim()
     .toLowerCase()
     .replace(/^app\//, "");
-  if (login.endsWith("[bot]")) return true;
-  return KNOWN_BOT_LOGINS.has(login);
 }

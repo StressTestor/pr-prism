@@ -58,3 +58,21 @@ describe("isBotAuthor", () => {
     expect(isBotAuthor(item("unknown"))).toBe(false);
   });
 });
+
+describe("isBotAuthor with configured logins", () => {
+  it("honours repo-specific bot logins", () => {
+    const extra = new Set(["acme-ci"]);
+    expect(isBotAuthor(item("acme-ci"), extra)).toBe(true);
+    expect(isBotAuthor(item("acme-ci"))).toBe(false);
+  });
+
+  it("normalises configured logins the same way as built-in ones", () => {
+    const extra = new Set(["  ACME-CI  "]);
+    expect(isBotAuthor(item("acme-ci"), extra)).toBe(true);
+    expect(isBotAuthor(item("app/ACME-CI"), extra)).toBe(true);
+  });
+
+  it("still defers to GitHub's account type", () => {
+    expect(isBotAuthor(item("acme-ci", false), new Set(["acme-ci"]))).toBe(false);
+  });
+});
