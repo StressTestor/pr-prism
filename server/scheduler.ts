@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { findDuplicateClusters } from "../src/cluster.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "../src/embeddings.js";
 import { GitHubClient } from "../src/github.js";
+import type { IncidentWindow } from "../src/incident.js";
 import { itemMetadata } from "../src/metadata.js";
 import { escapeTableCell } from "../src/sanitize.js";
 import type { Cluster, PRItem, StoreItem } from "../src/types.js";
@@ -22,6 +23,21 @@ export interface BacklogScanConfig {
   jinaApiKey: string;
   githubToken: string;
   similarityThreshold: number;
+  /** Repository-wide close events from this repo's config.json. When any are
+   * declared the scan also fetches closed items, since a window can only match
+   * against a `closedAt` the scan actually captured. */
+  incidents?: IncidentWindow[];
+}
+
+/**
+ * Which lifecycle states a backlog scan fetches.
+ *
+ * Closed items cost API calls and only earn them when a window could match
+ * one: an incident window tests `closedAt`, which is absent unless the scan
+ * captured it. A repo with no incidents declared keeps fetching open only.
+ */
+export function backlogFetchState(incidents: readonly unknown[] | undefined): "all" | "open" {
+  return incidents && incidents.length > 0 ? "all" : "open";
 }
 
 /**
@@ -106,19 +122,25 @@ export async function runBacklogScan(
     });
 
     const dims = embedder.dimensions;
-    const store = openRepoDB(config.dataDir, owner, repo, dims, "jina-embeddings-v3");
+    const incidents = config.incidents ?? [];
+    const store = openRepoDB(config.dataDir, owner, repo, dims, "jina-embeddings-v3", incidents);
 
     try {
-      // 2. fetch all open PRs + issues via REST (avoids 502s on large repos)
+      // 2. fetch PRs + issues via REST (avoids 502s on large repos)
       const github = new GitHubClient(config.githubToken, owner, repo);
 
-      console.log(`[backlog] ${fullName}: fetching open PRs...`);
-      const prs = await github.fetchPRs({ state: "open", maxItems: 5000, batchSize: 100 });
-      console.log(`[backlog] ${fullName}: fetched ${prs.length} open PRs`);
+      // Closed items are only worth their API cost when a window could match
+      // one. A repo with no incidents declared keeps fetching open items only.
+      const state = backlogFetchState(incidents);
+      const scope = state === "all" ? "open + closed" : "open";
 
-      console.log(`[backlog] ${fullName}: fetching open issues...`);
-      const issues = await github.fetchIssues({ state: "open", maxItems: 5000, batchSize: 100 });
-      console.log(`[backlog] ${fullName}: fetched ${issues.length} open issues`);
+      console.log(`[backlog] ${fullName}: fetching ${scope} PRs...`);
+      const prs = await github.fetchPRs({ state, maxItems: 5000, batchSize: 100 });
+      console.log(`[backlog] ${fullName}: fetched ${prs.length} PRs`);
+
+      console.log(`[backlog] ${fullName}: fetching ${scope} issues...`);
+      const issues = await github.fetchIssues({ state, maxItems: 5000, batchSize: 100 });
+      console.log(`[backlog] ${fullName}: fetched ${issues.length} issues`);
 
       const allItems: PRItem[] = [...prs, ...issues];
 

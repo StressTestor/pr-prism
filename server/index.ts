@@ -215,6 +215,7 @@ app.post("/webhook", async (c) => {
         jinaApiKey: serverConfig.jinaApiKey,
         githubToken: installToken,
         similarityThreshold: repoConfig.similarityThreshold,
+        incidents: repoConfig.incidents,
       };
 
       runBacklogScan(owner, repo, backlogConfig, callbacks.postIssue, {

@@ -1,11 +1,11 @@
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { formatWeeklyDigest, getLastMonday } from "../scheduler.js";
-import type { RepoDigestData } from "../scheduler.js";
-import { getItemCountSince, listInstalledRepos, openRepoDB } from "../db.js";
 import type { Cluster, ScoredPR } from "../../src/types.js";
+import { getItemCountSince, listInstalledRepos, openRepoDB } from "../db.js";
+import type { RepoDigestData } from "../scheduler.js";
+import { backlogFetchState, formatWeeklyDigest, getLastMonday } from "../scheduler.js";
 
 function makeScoredPR(number: number, title: string): ScoredPR {
   return {
@@ -326,5 +326,18 @@ describe("getItemCountSince", () => {
     // items since March 20 should be 0
     const count3 = getItemCountSince(dir, "test", "repo", "2026-03-20T00:00:00Z");
     expect(count3).toBe(0);
+  });
+});
+
+describe("backlogFetchState", () => {
+  it("fetches open items only when no incident is declared", () => {
+    expect(backlogFetchState([])).toBe("open");
+    expect(backlogFetchState(undefined)).toBe("open");
+  });
+
+  it("fetches closed items too once a window exists", () => {
+    // A window matches on closedAt, which a scan can only record for items it
+    // actually fetched. Fetching open-only would make every window match zero.
+    expect(backlogFetchState([{ start: "a", end: "b", reason: "c" }])).toBe("all");
   });
 });

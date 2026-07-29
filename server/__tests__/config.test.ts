@@ -1,14 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_REPO_CONFIG,
-  loadRepoConfig,
-  loadServerConfig,
-  saveRepoConfig,
-} from "../config.js";
 import type { RepoConfig } from "../config.js";
+import { DEFAULT_REPO_CONFIG, loadRepoConfig, loadServerConfig, saveRepoConfig } from "../config.js";
 
 describe("loadServerConfig", () => {
   const originalEnv = { ...process.env };
@@ -105,6 +100,7 @@ describe("loadRepoConfig", () => {
 
   it("reads config from disk", () => {
     const custom: RepoConfig = {
+      incidents: [],
       autoClose: true,
       autoCloseThreshold: 0.9,
       similarityThreshold: 0.75,
@@ -123,11 +119,7 @@ describe("loadRepoConfig", () => {
     const dir = join(dataDir, "octocat-my-repo");
     const { mkdirSync, writeFileSync } = require("node:fs");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, "config.json"),
-      JSON.stringify({ autoClose: true }),
-      "utf-8",
-    );
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ autoClose: true }), "utf-8");
 
     const loaded = loadRepoConfig(dataDir, "octocat", "my-repo");
 
@@ -199,6 +191,7 @@ describe("saveRepoConfig", () => {
 
   it("roundtrips correctly", () => {
     const custom: RepoConfig = {
+      incidents: [],
       autoClose: true,
       autoCloseThreshold: 0.92,
       similarityThreshold: 0.7,
@@ -220,5 +213,60 @@ describe("DEFAULT_REPO_CONFIG", () => {
     expect(DEFAULT_REPO_CONFIG.similarityThreshold).toBe(0.85);
     expect(DEFAULT_REPO_CONFIG.weeklyDigest).toBe(true);
     expect(DEFAULT_REPO_CONFIG.smartRouting).toBe(true);
+  });
+});
+
+describe("repo incident windows", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-repo-incidents-"));
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  function write(config: unknown) {
+    const dir = join(dataDir, "octocat-my-repo");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), JSON.stringify(config));
+  }
+
+  it("defaults to no windows", () => {
+    expect(loadRepoConfig(dataDir, "octocat", "my-repo").incidents).toEqual([]);
+  });
+
+  it("loads configured windows", () => {
+    write({
+      incidents: [{ start: "2026-07-23T09:00:00Z", end: "2026-07-23T11:00:00Z", reason: "visibility flip" }],
+    });
+    const cfg = loadRepoConfig(dataDir, "octocat", "my-repo");
+    expect(cfg.incidents).toHaveLength(1);
+    expect(cfg.incidents?.[0].reason).toBe("visibility flip");
+  });
+
+  it("throws on a malformed window instead of falling back to none", () => {
+    // The catch-all fallback is fine for a corrupt file, but a readable config
+    // with a bad window would silently rank an incident backlog as rejected,
+    // which is the bug this feature exists to fix.
+    write({ incidents: [{ start: "nonsense", end: "2026-07-23T11:00:00Z", reason: "typo" }] });
+    expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/typo/);
+  });
+
+  it("throws on an inverted window", () => {
+    write({
+      incidents: [{ start: "2026-07-23T11:00:00Z", end: "2026-07-23T09:00:00Z", reason: "backwards" }],
+    });
+    expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/after its start/);
+  });
+
+  it("still falls back to defaults for an unreadable file", () => {
+    const dir = join(dataDir, "octocat-my-repo");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), "{ not json");
+    expect(loadRepoConfig(dataDir, "octocat", "my-repo")).toEqual(DEFAULT_REPO_CONFIG);
   });
 });
