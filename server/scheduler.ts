@@ -2,6 +2,8 @@ import cron from "node-cron";
 import { findDuplicateClusters } from "../src/cluster.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "../src/embeddings.js";
 import { GitHubClient } from "../src/github.js";
+import type { IncidentWindow } from "../src/incident.js";
+import { loadRepoConfig, type RepoClusterConfig } from "./config.js";
 import { itemMetadata } from "../src/metadata.js";
 import { escapeTableCell } from "../src/sanitize.js";
 import type { Cluster, PRItem, StoreItem } from "../src/types.js";
@@ -22,6 +24,41 @@ export interface BacklogScanConfig {
   jinaApiKey: string;
   githubToken: string;
   similarityThreshold: number;
+  /** Repository-wide close events from this repo's config.json. When any are
+   * declared the scan also fetches closed items, since a window can only match
+   * against a `closedAt` the scan actually captured. */
+  incidents?: IncidentWindow[];
+  /** This repo's `cluster` block. Without it the App would honour only the
+   * built-in bot list while the CLI honoured the repo's own additions. */
+  cluster?: RepoClusterConfig;
+}
+
+/**
+ * Whether a backlog scan fetches closed items in addition to open ones.
+ *
+ * Closed items cost API calls and only earn them when a window could match
+ * one: an incident window tests `closedAt`, which is absent unless the scan
+ * captured it. A repo with no incidents declared fetches open only.
+ */
+export function backlogFetchesClosed(incidents: readonly unknown[] | undefined): boolean {
+  return Boolean(incidents && incidents.length > 0);
+}
+
+/**
+ * The lower bound for a backlog scan's fetch.
+ *
+ * backlogFetchState only decides open-vs-all. Without a bound as well, a single
+ * declared window flips the scan to every closed item the repository has ever
+ * had, which for a large repo is most of its history. An item closed by an
+ * incident was necessarily updated at or after that window opened, so the
+ * earliest window start is a safe lower bound: GitHub filters on updated_at,
+ * which for these items is the close itself or later.
+ */
+export function backlogFetchSince(
+  incidents: readonly { start: string }[] | undefined,
+): string | undefined {
+  if (!incidents || incidents.length === 0) return undefined;
+  return incidents.reduce((earliest, w) => (Date.parse(w.start) < Date.parse(earliest) ? w.start : earliest), incidents[0].start);
 }
 
 /**
@@ -33,7 +70,7 @@ function formatTriageReport(owner: string, repo: string, totalItems: number, clu
   const totalDupes = clusters.reduce((s, c) => s + c.items.length, 0);
 
   let body = `## summary\n\n`;
-  body += `- **${totalItems}** open issues and PRs scanned\n`;
+  body += `- **${totalItems}** issues and PRs scanned\n`;
   body += `- **${clusters.length}** duplicate clusters found\n`;
   body += `- **${totalDupes}** items involved in duplicates\n\n`;
 
@@ -106,24 +143,38 @@ export async function runBacklogScan(
     });
 
     const dims = embedder.dimensions;
-    const store = openRepoDB(config.dataDir, owner, repo, dims, "jina-embeddings-v3");
+    const incidents = config.incidents ?? [];
+    const store = openRepoDB(config.dataDir, owner, repo, dims, "jina-embeddings-v3", incidents);
 
     try {
-      // 2. fetch all open PRs + issues via REST (avoids 502s on large repos)
+      // 2. fetch PRs + issues via REST (avoids 502s on large repos)
       const github = new GitHubClient(config.githubToken, owner, repo);
 
+      // Closed items are only worth their API cost when a window could match
+      // one. A repo with no incidents declared keeps fetching open items only.
+      // Open and closed are fetched separately on purpose. `since` aborts a
+      // fetch at the first item updated before it, and the lists are sorted by
+      // updated desc, so a single state:"all" call bounded by `since` would
+      // also drop open items nobody has touched lately - exactly the stale
+      // duplicates a backlog scan exists to find. Open is therefore unbounded,
+      // and only the closed pass carries the window bound.
       console.log(`[backlog] ${fullName}: fetching open PRs...`);
       const prs = await github.fetchPRs({ state: "open", maxItems: 5000, batchSize: 100 });
-      console.log(`[backlog] ${fullName}: fetched ${prs.length} open PRs`);
-
       console.log(`[backlog] ${fullName}: fetching open issues...`);
       const issues = await github.fetchIssues({ state: "open", maxItems: 5000, batchSize: 100 });
-      console.log(`[backlog] ${fullName}: fetched ${issues.length} open issues`);
+
+      if (backlogFetchesClosed(incidents)) {
+        const since = backlogFetchSince(incidents);
+        console.log(`[backlog] ${fullName}: fetching closed items updated since ${since}...`);
+        prs.push(...(await github.fetchPRs({ state: "closed", since, maxItems: 5000, batchSize: 100 })));
+        issues.push(...(await github.fetchIssues({ state: "closed", since, maxItems: 5000, batchSize: 100 })));
+      }
+      console.log(`[backlog] ${fullName}: fetched ${prs.length} PRs, ${issues.length} issues`);
 
       const allItems: PRItem[] = [...prs, ...issues];
 
       if (allItems.length === 0) {
-        console.log(`[backlog] ${fullName}: no open items found, skipping`);
+        console.log(`[backlog] ${fullName}: no items found, skipping`);
         store.setMeta("last_sync", new Date().toISOString());
         return;
       }
@@ -186,6 +237,8 @@ export async function runBacklogScan(
       const clusters = findDuplicateClusters(store, items, {
         threshold: config.similarityThreshold,
         repo: fullName,
+        includeBotAuthors: config.cluster?.includeBotAuthors,
+        botAuthors: new Set(config.cluster?.botAuthors ?? []),
       });
       console.log(`[backlog] ${fullName}: found ${clusters.length} duplicate clusters`);
 
@@ -217,6 +270,10 @@ export async function runBacklogScan(
       similarityThreshold: config.similarityThreshold,
       autoClose: false,
       autoCloseThreshold: 0.95,
+      // Drained events are triaged on the same terms as live ones. Omitting
+      // this would filter bots on the webhook that arrived a second later and
+      // not on the one that arrived during the scan.
+      cluster: config.cluster,
     };
 
     const postComment =
@@ -244,10 +301,11 @@ export async function runBacklogScan(
 
 // --- weekly digest ---
 
+/** The digest reads per-repo settings itself, so it needs only the location of
+ * the data directory. A global threshold here would be a lie: it applied to
+ * every repo regardless of that repo's own configuration. */
 export interface WeeklyDigestConfig {
   dataDir: string;
-  similarityThreshold: number;
-  autoClose: boolean;
 }
 
 export interface RepoDigestData {
@@ -354,16 +412,23 @@ export function startWeeklyDigest(
             const status = getRepoStatus(config.dataDir, owner, repo);
             const newItems = getItemCountSince(config.dataDir, owner, repo, lastMonday);
 
-            // run clustering to get current cluster state
+            // run clustering to get current cluster state. per-repo config is
+            // loaded here rather than taken from the digest's global config:
+            // otherwise the digest reports different clusters than the backlog
+            // scan for the same repo, having applied neither its incident
+            // windows nor its bot logins.
+            const repoConfig = loadRepoConfig(config.dataDir, owner, repo);
             let clusters: Cluster[] = [];
             try {
-              const store = openRepoDB(config.dataDir, owner, repo);
+              const store = openRepoDB(config.dataDir, owner, repo, undefined, undefined, repoConfig.incidents);
               try {
                 const items = store.getAllItems(fullName) as unknown as PRItem[];
                 if (items.length > 0) {
                   clusters = findDuplicateClusters(store, items, {
-                    threshold: config.similarityThreshold,
+                    threshold: repoConfig.similarityThreshold,
                     repo: fullName,
+                    includeBotAuthors: repoConfig.cluster.includeBotAuthors,
+                    botAuthors: new Set(repoConfig.cluster.botAuthors),
                   });
                 }
               } finally {

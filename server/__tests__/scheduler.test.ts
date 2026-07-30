@@ -1,11 +1,11 @@
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { formatWeeklyDigest, getLastMonday } from "../scheduler.js";
-import type { RepoDigestData } from "../scheduler.js";
-import { getItemCountSince, listInstalledRepos, openRepoDB } from "../db.js";
 import type { Cluster, ScoredPR } from "../../src/types.js";
+import { getItemCountSince, listInstalledRepos, openRepoDB } from "../db.js";
+import type { RepoDigestData } from "../scheduler.js";
+import { backlogFetchSince, backlogFetchesClosed, formatWeeklyDigest, getLastMonday } from "../scheduler.js";
 
 function makeScoredPR(number: number, title: string): ScoredPR {
   return {
@@ -326,5 +326,37 @@ describe("getItemCountSince", () => {
     // items since March 20 should be 0
     const count3 = getItemCountSince(dir, "test", "repo", "2026-03-20T00:00:00Z");
     expect(count3).toBe(0);
+  });
+});
+
+describe("backlogFetchesClosed", () => {
+  it("is false when no incident is declared", () => {
+    expect(backlogFetchesClosed([])).toBe(false);
+    expect(backlogFetchesClosed(undefined)).toBe(false);
+  });
+
+  it("is true once a window exists", () => {
+    // A window matches on closedAt, which a scan can only record for items it
+    // actually fetched. Fetching open-only would make every window match zero.
+    expect(backlogFetchesClosed([{ start: "a", end: "b", reason: "c" }])).toBe(true);
+  });
+});
+
+describe("backlogFetchSince", () => {
+  it("is undefined when no incident is declared", () => {
+    expect(backlogFetchSince([])).toBeUndefined();
+    expect(backlogFetchSince(undefined)).toBeUndefined();
+  });
+
+  it("is the earliest window start, so closed items outside every window are not fetched", () => {
+    // Without this, one window flips the scan to every closed item the repo has
+    // ever had. An item closed by an incident was updated at or after that
+    // window opened, so the earliest start is a safe lower bound.
+    expect(
+      backlogFetchSince([
+        { start: "2026-07-23T09:00:00Z", end: "2026-07-23T11:00:00Z", reason: "b" },
+        { start: "2026-05-01T00:00:00Z", end: "2026-05-02T00:00:00Z", reason: "a" },
+      ]),
+    ).toBe("2026-05-01T00:00:00Z");
   });
 });

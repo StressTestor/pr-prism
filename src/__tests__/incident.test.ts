@@ -124,3 +124,41 @@ describe("compileIncidentWindows", () => {
     expect(w.end).toBe(Date.parse("2026-07-23T11:00:00Z"));
   });
 });
+
+describe("compileIncidentWindows offset rule", () => {
+  // The CLI rejects offset-less bounds through zod before they ever reach
+  // compileIncidentWindows. The server has no zod layer, so the same string
+  // reaching the same feature was accepted there and parsed in the host
+  // timezone - the exact ambiguity the CLI rule exists to prevent.
+  it("rejects a bound with no UTC offset", () => {
+    expect(() =>
+      compileIncidentWindows([{ start: "2026-07-23T00:00:00", end: "2026-07-24T00:00:00Z", reason: "x" }]),
+    ).toThrow(/offset/);
+  });
+
+  it("rejects a date-only bound", () => {
+    expect(() => compileIncidentWindows([{ start: "2026-07-23", end: "2026-07-24T00:00:00Z", reason: "x" }])).toThrow(
+      /offset/,
+    );
+  });
+
+  it("rejects the space-separated form", () => {
+    expect(() =>
+      compileIncidentWindows([{ start: "2026-07-23 00:00:00+00:00", end: "2026-07-24T00:00:00Z", reason: "x" }]),
+    ).toThrow(/offset/);
+  });
+
+  it("accepts Z and numeric offsets", () => {
+    expect(
+      compileIncidentWindows([{ start: "2026-07-23T00:00:00Z", end: "2026-07-24T00:00:00Z", reason: "x" }]),
+    ).toHaveLength(1);
+    expect(
+      compileIncidentWindows([{ start: "2026-07-23T00:00:00+02:00", end: "2026-07-24T00:00:00+02:00", reason: "x" }]),
+    ).toHaveLength(1);
+  });
+
+  it("rejects a non-array and a non-object entry with a usable message", () => {
+    expect(() => compileIncidentWindows("yes" as never)).toThrow(/list/);
+    expect(() => compileIncidentWindows([null] as never)).toThrow(/object/);
+  });
+});

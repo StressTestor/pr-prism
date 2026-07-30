@@ -2,11 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebhookEvent } from "../webhook.js";
-import { openRepoDB } from "../db.js";
-import { setRepoScanning, isRepoScanning, drainWebhookQueue } from "../db.js";
-import { formatTriageComment, formatAutoCloseComment } from "../format.js";
+import { drainWebhookQueue, isRepoScanning, openRepoDB, setRepoScanning } from "../db.js";
 import type { DupeMatch } from "../format.js";
+import { formatAutoCloseComment, formatTriageComment } from "../format.js";
+import type { WebhookEvent } from "../webhook.js";
 
 // --- mock createEmbeddingProvider so we never hit a real API ---
 
@@ -33,12 +32,10 @@ vi.mock("../../src/embeddings.js", () => ({
     embedBatch: vi.fn(async (texts: string[]) => texts.map(() => mockEmbedResult)),
     dimensions: DIMS,
   })),
-  prepareEmbeddingText: vi.fn(
-    (item: { title: string; body: string; type: string }) => {
-      const prefix = item.type === "pr" ? "Pull Request" : "Issue";
-      return `${prefix}: ${item.title}\n\n${item.body}`;
-    },
-  ),
+  prepareEmbeddingText: vi.fn((item: { title: string; body: string; type: string }) => {
+    const prefix = item.type === "pr" ? "Pull Request" : "Issue";
+    return `${prefix}: ${item.title}\n\n${item.body}`;
+  }),
 }));
 
 // --- helpers ---
@@ -324,5 +321,257 @@ describe("formatAutoCloseComment", () => {
     expect(result).toContain("#1234");
     expect(result).toContain("96.5%");
     expect(result).toContain("auto-closed by");
+  });
+});
+
+describe("triageNewItem stored metadata", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-triage-meta-"));
+    setRepoScanning("octocat", "my-repo", false);
+    mockEmbedResult = VEC_UNRELATED;
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  const event = (over: Partial<WebhookEvent> = {}): WebhookEvent => ({
+    action: "opened",
+    eventType: "pull_request",
+    number: 77,
+    title: "a new pr",
+    body: "body",
+    repo: { owner: "octocat", name: "my-repo", fullName: "octocat/my-repo" },
+    sender: "contributor",
+    ...over,
+  });
+
+  const cfg = () => ({
+    dataDir,
+    jinaApiKey: "fake-key",
+    similarityThreshold: 0.8,
+    autoClose: false,
+    autoCloseThreshold: 0.95,
+  });
+
+  it("names its fields the way the scan path does", async () => {
+    const { triageNewItem } = await import("../triage.js");
+    const { itemMetadata } = await import("../../src/metadata.js");
+    await triageNewItem(event(), cfg() as never);
+
+    const store = openRepoDB(dataDir, "octocat", "my-repo", DIMS, "jina-embeddings-v3");
+    const stored = (store.getByNumber("octocat/my-repo", 77)?.metadata ?? {}) as Record<string, unknown>;
+    store.close();
+
+    const scanKeys = new Set(
+      Object.keys(
+        itemMetadata({
+          number: 77,
+          type: "pr",
+          repo: "octocat/my-repo",
+          title: "a new pr",
+          body: "body",
+          state: "open",
+          author: "contributor",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+          labels: [],
+        }),
+      ),
+    );
+    // Not every key: the webhook cannot observe labels or CI. But no key it
+    // does write may be one the scan path has never heard of.
+    for (const key of Object.keys(stored)) {
+      expect(scanKeys.has(key), `"${key}" is not a field itemMetadata writes`).toBe(true);
+    }
+    expect(stored.author).toBe("contributor");
+    expect(stored.state).toBe("open");
+    expect(stored.bodyLength).toBe("body".length);
+  });
+
+  it("does not erase fields a previous scan stored", async () => {
+    // A webhook arriving after a backlog scan used to overwrite metadata_json
+    // wholesale, dropping everything the scan had learned about the item.
+    const store = openRepoDB(dataDir, "octocat", "my-repo", DIMS, "jina-embeddings-v3");
+    store.upsert({
+      id: "octocat/my-repo:pr:77",
+      type: "pr",
+      number: 77,
+      repo: "octocat/my-repo",
+      title: "a new pr",
+      bodySnippet: "",
+      embedding: new Float32Array(VEC_UNRELATED),
+      metadata: {
+        author: "contributor",
+        authorIsBot: false,
+        state: "open",
+        labels: ["bug"],
+        additions: 120,
+        ciStatus: "success",
+        closesIssues: [12],
+      },
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+    store.close();
+
+    const { triageNewItem } = await import("../triage.js");
+    await triageNewItem(event(), cfg() as never);
+
+    const after = openRepoDB(dataDir, "octocat", "my-repo", DIMS, "jina-embeddings-v3");
+    const stored = (after.getByNumber("octocat/my-repo", 77)?.metadata ?? {}) as Record<string, unknown>;
+    after.close();
+
+    expect(stored.additions).toBe(120);
+    expect(stored.ciStatus).toBe("success");
+    expect(stored.closesIssues).toEqual([12]);
+    expect(stored.labels).toEqual(["bug"]);
+  });
+});
+
+describe("triageNewItem bot filtering", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-triage-bots-"));
+    setRepoScanning("octocat", "my-repo", false);
+    mockEmbedResult = VEC_A;
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  const event = (over: Partial<WebhookEvent> = {}): WebhookEvent => ({
+    action: "opened",
+    eventType: "pull_request",
+    number: 90,
+    title: "chore(deps): bump the npm group with 2 updates",
+    body: "bumps things",
+    repo: { owner: "octocat", name: "my-repo", fullName: "octocat/my-repo" },
+    sender: "human-dev",
+    ...over,
+  });
+
+  const cfg = (over: Record<string, unknown> = {}) => ({
+    dataDir,
+    jinaApiKey: "fake-key",
+    similarityThreshold: 0.8,
+    autoClose: false,
+    autoCloseThreshold: 0.95,
+    cluster: { includeBotAuthors: false, botAuthors: [] },
+    ...over,
+  });
+
+  function seedBot(number: number) {
+    const store = openRepoDB(dataDir, "octocat", "my-repo", DIMS, "jina-embeddings-v3");
+    store.upsert({
+      id: `octocat/my-repo:pr:${number}`,
+      type: "pr",
+      number,
+      repo: "octocat/my-repo",
+      title: "chore(deps): bump the npm group with 2 updates",
+      bodySnippet: "",
+      embedding: new Float32Array(VEC_B),
+      metadata: { author: "dependabot[bot]", authorIsBot: true, state: "open" },
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+    store.close();
+  }
+
+  it("does not comment when the incoming item is bot-authored", async () => {
+    // dependabot reuses titles, so consecutive bot PRs read as near-identical.
+    // #26 removed that noise from clustering; posting it as a webhook comment
+    // on someone's repository is the same noise, just louder.
+    seedBot(80);
+    const { triageNewItem } = await import("../triage.js");
+    const result = await triageNewItem(event({ sender: "dependabot[bot]" }), cfg() as never, async () => {});
+    expect(result.commented).toBe(false);
+    expect(result.matches).toHaveLength(0);
+  });
+
+  it("does not offer a bot-authored item as a duplicate of a human PR", async () => {
+    seedBot(80);
+    const { triageNewItem } = await import("../triage.js");
+    const result = await triageNewItem(event(), cfg() as never, async () => {});
+    expect(result.matches.map((m) => m.number)).not.toContain(80);
+  });
+
+  it("still triages bots when the repo opts in", async () => {
+    seedBot(80);
+    const { triageNewItem } = await import("../triage.js");
+    const result = await triageNewItem(
+      event({ sender: "dependabot[bot]" }),
+      cfg({ cluster: { includeBotAuthors: true, botAuthors: [] } }) as never,
+      async () => {},
+    );
+    expect(result.matches.map((m) => m.number)).toContain(80);
+  });
+
+  it("honours repo-specific bot logins", async () => {
+    seedBot(80);
+    const { triageNewItem } = await import("../triage.js");
+    const result = await triageNewItem(
+      event({ sender: "acme-ci" }),
+      cfg({ cluster: { includeBotAuthors: false, botAuthors: ["acme-ci"] } }) as never,
+      async () => {},
+    );
+    expect(result.commented).toBe(false);
+  });
+});
+
+describe("triage bot items are still indexed", () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-triage-index-"));
+    setRepoScanning("octocat", "my-repo", false);
+    mockEmbedResult = VEC_A;
+  });
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  it("stores a bot-authored item even though it does not comment on it", async () => {
+    // The backlog scan stores every item and filters at cluster time. If the
+    // webhook path dropped bot items instead, the database would depend on
+    // which path saw the item, and flipping includeBotAuthors on would need a
+    // full rescan to become true.
+    const { triageNewItem } = await import("../triage.js");
+    const result = await triageNewItem(
+      {
+        action: "opened",
+        eventType: "pull_request",
+        number: 91,
+        title: "chore(deps): bump",
+        body: "b",
+        repo: { owner: "octocat", name: "my-repo", fullName: "octocat/my-repo" },
+        sender: "dependabot[bot]",
+      } as WebhookEvent,
+      {
+        dataDir,
+        jinaApiKey: "fake-key",
+        similarityThreshold: 0.8,
+        autoClose: false,
+        autoCloseThreshold: 0.95,
+        cluster: { includeBotAuthors: false, botAuthors: [] },
+      } as never,
+      async () => {},
+    );
+    expect(result.commented).toBe(false);
+
+    const store = openRepoDB(dataDir, "octocat", "my-repo", DIMS, "jina-embeddings-v3");
+    const stored = store.getByNumber("octocat/my-repo", 91);
+    store.close();
+    expect(stored).toBeDefined();
+    expect(stored?.metadata?.author).toBe("dependabot[bot]");
   });
 });

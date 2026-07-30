@@ -1,12 +1,14 @@
+import { isBotAuthor } from "../src/bots.js";
 import { selectCanonical } from "../src/canonical.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "../src/embeddings.js";
+import type { ItemMetadata } from "../src/metadata.js";
 import { cosineSimilarity, isZeroVector } from "../src/similarity.js";
 import type { StoreItem } from "../src/types.js";
 import { isRepoScanning, openRepoDB, queueWebhook } from "./db.js";
-import { formatAutoCloseComment, formatTriageComment } from "./format.js";
 import type { DupeMatch } from "./format.js";
-import { suggestOwners } from "./routing.js";
+import { formatAutoCloseComment, formatTriageComment } from "./format.js";
 import type { OwnerSuggestion } from "./routing.js";
+import { suggestOwners } from "./routing.js";
 import type { WebhookEvent } from "./webhook.js";
 
 export type { DupeMatch } from "./format.js";
@@ -27,6 +29,8 @@ export interface TriageConfig {
   similarityThreshold: number;
   autoClose: boolean;
   autoCloseThreshold: number;
+  /** This repo's `cluster` block. Absent means the built-in bot list only. */
+  cluster?: { includeBotAuthors: boolean; botAuthors: string[] };
 }
 
 export async function triageNewItem(
@@ -38,6 +42,9 @@ export async function triageNewItem(
 ): Promise<TriageResult> {
   const start = performance.now();
   const { owner, name: repoName, fullName: repo } = event.repo;
+
+  const botLogins = new Set(config.cluster?.botAuthors ?? []);
+  const includeBots = config.cluster?.includeBotAuthors ?? false;
 
   const empty: TriageResult = {
     repo,
@@ -55,6 +62,7 @@ export async function triageNewItem(
     empty.elapsedMs = performance.now() - start;
     return empty;
   }
+
 
   // set up embedding provider (Jina)
   const embedder = await createEmbeddingProvider({
@@ -85,19 +93,54 @@ export async function triageNewItem(
 
     // upsert the new item into the store
     const now = new Date().toISOString();
+    const id = `${repo}:${itemType}:${event.number}`;
+
+    // A webhook knows only what the event carries. Everything else an item has
+    // (labels, diff size, CI, closing refs) comes from a scan, so only the
+    // event's own fields are written and the rest of the stored row is left
+    // alone: upsert replaces metadata_json wholesale, and a webhook arriving
+    // after a backlog scan would otherwise drop everything that scan learned.
+    const existing = (store.getItem(id)?.metadata ?? {}) as Record<string, unknown>;
+    // Only the fields the event can observe. Typed as a subset of what
+    // itemMetadata produces, so a rename there breaks the build here rather
+    // than silently writing a key nothing reads. A field the webhook cannot
+    // see is left as stored: `labels: []` would claim the item has none rather
+    // than that the webhook did not look.
+    const observed: Partial<ItemMetadata> = {
+      author: event.sender,
+      state: "open",
+      bodyLength: (event.body || "").length,
+    };
+    const metadata: Record<string, unknown> = { ...existing, ...observed };
+
     const storeItem: StoreItem = {
-      id: `${repo}:${itemType}:${event.number}`,
+      id,
       type: itemType,
       number: event.number,
       repo,
       title: event.title,
       bodySnippet: (event.body || "").slice(0, 2000),
       embedding,
-      metadata: { author: event.sender, state: "open" },
+      metadata,
       createdAt: now,
       updatedAt: now,
     };
     store.upsert(storeItem);
+
+    // Automation reuses titles for unrelated content, so consecutive bot items
+    // read as near-identical. Clustering already excludes them; commenting
+    // "this looks like a duplicate" on a bot's PR is that same noise, posted to
+    // someone's repository.
+    //
+    // Deliberately after the upsert, not before it. The backlog scan stores
+    // every item and filters at cluster time, so bailing earlier would make the
+    // database depend on which path saw the item, and flipping
+    // includeBotAuthors on would need a full rescan to become true. The cost is
+    // one embedding per bot item, which the scan path pays anyway.
+    if (!includeBots && isBotAuthor({ author: event.sender }, botLogins)) {
+      empty.elapsedMs = performance.now() - start;
+      return empty;
+    }
 
     // get all existing embeddings and items for this repo
     const allEmbeddings = store.getAllEmbeddings(repo);
@@ -120,6 +163,20 @@ export async function triageNewItem(
       if (sim >= config.similarityThreshold) {
         const item = itemMap.get(id);
         if (!item) continue;
+        // Same rule on the other side: a bot's PR is not a useful "you
+        // duplicated this" answer for a human contributor.
+        if (
+          !includeBots &&
+          isBotAuthor(
+            {
+              author: (item.metadata?.author as string) ?? "",
+              authorIsBot: item.metadata?.authorIsBot as boolean | undefined,
+            },
+            botLogins,
+          )
+        ) {
+          continue;
+        }
 
         matches.push({
           number: item.number,
@@ -174,11 +231,7 @@ export async function triageNewItem(
     let closed = false;
 
     // auto-close if enabled and top match exceeds threshold
-    if (
-      config.autoClose &&
-      closeIssue &&
-      matches[0].similarity >= config.autoCloseThreshold
-    ) {
+    if (config.autoClose && closeIssue && matches[0].similarity >= config.autoCloseThreshold) {
       const closeComment = formatAutoCloseComment(repo, source, matches[0].similarity);
       await postComment(repo, event.number, closeComment);
       await closeIssue(repo, event.number);

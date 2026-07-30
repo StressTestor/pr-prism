@@ -1,14 +1,15 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RepoConfig } from "../config.js";
 import {
   DEFAULT_REPO_CONFIG,
   loadRepoConfig,
+  loadRepoConfigIsolated,
   loadServerConfig,
   saveRepoConfig,
 } from "../config.js";
-import type { RepoConfig } from "../config.js";
 
 describe("loadServerConfig", () => {
   const originalEnv = { ...process.env };
@@ -105,6 +106,8 @@ describe("loadRepoConfig", () => {
 
   it("reads config from disk", () => {
     const custom: RepoConfig = {
+      incidents: [],
+      cluster: { includeBotAuthors: false, botAuthors: [] },
       autoClose: true,
       autoCloseThreshold: 0.9,
       similarityThreshold: 0.75,
@@ -123,11 +126,7 @@ describe("loadRepoConfig", () => {
     const dir = join(dataDir, "octocat-my-repo");
     const { mkdirSync, writeFileSync } = require("node:fs");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, "config.json"),
-      JSON.stringify({ autoClose: true }),
-      "utf-8",
-    );
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ autoClose: true }), "utf-8");
 
     const loaded = loadRepoConfig(dataDir, "octocat", "my-repo");
 
@@ -199,6 +198,8 @@ describe("saveRepoConfig", () => {
 
   it("roundtrips correctly", () => {
     const custom: RepoConfig = {
+      incidents: [],
+      cluster: { includeBotAuthors: false, botAuthors: [] },
       autoClose: true,
       autoCloseThreshold: 0.92,
       similarityThreshold: 0.7,
@@ -220,5 +221,196 @@ describe("DEFAULT_REPO_CONFIG", () => {
     expect(DEFAULT_REPO_CONFIG.similarityThreshold).toBe(0.85);
     expect(DEFAULT_REPO_CONFIG.weeklyDigest).toBe(true);
     expect(DEFAULT_REPO_CONFIG.smartRouting).toBe(true);
+  });
+});
+
+describe("repo incident windows", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-repo-incidents-"));
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  function write(config: unknown) {
+    const dir = join(dataDir, "octocat-my-repo");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), JSON.stringify(config));
+  }
+
+  it("defaults to no windows", () => {
+    expect(loadRepoConfig(dataDir, "octocat", "my-repo").incidents).toEqual([]);
+  });
+
+  it("loads configured windows", () => {
+    write({
+      incidents: [{ start: "2026-07-23T09:00:00Z", end: "2026-07-23T11:00:00Z", reason: "visibility flip" }],
+    });
+    const cfg = loadRepoConfig(dataDir, "octocat", "my-repo");
+    expect(cfg.incidents).toHaveLength(1);
+    expect(cfg.incidents?.[0].reason).toBe("visibility flip");
+  });
+
+  it("throws on a malformed window instead of falling back to none", () => {
+    // The catch-all fallback is fine for a corrupt file, but a readable config
+    // with a bad window would silently rank an incident backlog as rejected,
+    // which is the bug this feature exists to fix.
+    write({ incidents: [{ start: "nonsense", end: "2026-07-23T11:00:00Z", reason: "typo" }] });
+    expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/typo/);
+  });
+
+  it("throws on an inverted window", () => {
+    write({
+      incidents: [{ start: "2026-07-23T11:00:00Z", end: "2026-07-23T09:00:00Z", reason: "backwards" }],
+    });
+    expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/after its start/);
+  });
+
+  it("still falls back to defaults for an unreadable file", () => {
+    const dir = join(dataDir, "octocat-my-repo");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), "{ not json");
+    expect(loadRepoConfig(dataDir, "octocat", "my-repo")).toEqual(DEFAULT_REPO_CONFIG);
+  });
+});
+
+describe("repo cluster config", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-repo-cluster-"));
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  function write(config: unknown) {
+    const dir = join(dataDir, "octocat-my-repo");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), JSON.stringify(config));
+  }
+
+  it("defaults to excluding bots with no extra logins", () => {
+    const cfg = loadRepoConfig(dataDir, "octocat", "my-repo");
+    expect(cfg.cluster.includeBotAuthors).toBe(false);
+    expect(cfg.cluster.botAuthors).toEqual([]);
+  });
+
+  it("loads repo-specific bot logins", () => {
+    write({ cluster: { botAuthors: ["acme-ci"] } });
+    const cfg = loadRepoConfig(dataDir, "octocat", "my-repo");
+    expect(cfg.cluster.botAuthors).toEqual(["acme-ci"]);
+    // merged with the default, not replacing the whole block
+    expect(cfg.cluster.includeBotAuthors).toBe(false);
+  });
+
+  it("can opt bots back in", () => {
+    write({ cluster: { includeBotAuthors: true } });
+    expect(loadRepoConfig(dataDir, "octocat", "my-repo").cluster.includeBotAuthors).toBe(true);
+  });
+});
+
+describe("repo config hostile input", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-repo-hostile-"));
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  function write(config: unknown) {
+    const dir = join(dataDir, "octocat-my-repo");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), JSON.stringify(config));
+  }
+
+  it("rejects a botAuthors that is not a list of strings", () => {
+    // config.json is hand-editable. Without a check this reaches
+    // `new Set(42)` inside the scheduler, far from the file that caused it.
+    write({ cluster: { botAuthors: 42 } });
+    expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/botAuthors/);
+  });
+
+  it("rejects a non-boolean includeBotAuthors", () => {
+    write({ cluster: { includeBotAuthors: "yes" } });
+    expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/includeBotAuthors/);
+  });
+
+  it("rejects incidents that is not a list", () => {
+    write({ incidents: "yes" });
+    expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/incidents/);
+  });
+});
+
+describe("loadRepoConfigIsolated", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-isolated-"));
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  function write(owner: string, repo: string, config: unknown) {
+    const dir = join(dataDir, `${owner}-${repo}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), JSON.stringify(config));
+  }
+
+  it("returns the config for a good repo", () => {
+    write("octocat", "good", { similarityThreshold: 0.7 });
+    expect(loadRepoConfigIsolated(dataDir, "octocat", "good")?.similarityThreshold).toBe(0.7);
+  });
+
+  it("returns null and names the repo instead of throwing", () => {
+    // One repo's hand-edited config must not be able to abort a loop over every
+    // other repo in the installation. The throw is still loud, just contained.
+    write("octocat", "bad", { incidents: [{ start: "nonsense", end: "2026-07-24T00:00:00Z", reason: "typo" }] });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = loadRepoConfigIsolated(dataDir, "octocat", "bad");
+    const logged = err.mock.calls.map((c) => c.join(" ")).join("\n");
+    err.mockRestore();
+    expect(result).toBeNull();
+    expect(logged).toMatch(/octocat\/bad/);
+    expect(logged).toMatch(/typo/);
+  });
+
+  it("does not fall back to defaults, which would hide the misconfiguration", () => {
+    write("octocat", "bad", { incidents: "yes" });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = loadRepoConfigIsolated(dataDir, "octocat", "bad");
+    err.mockRestore();
+    expect(result).toBeNull();
+  });
+});
+
+describe("repo cluster must be an object", () => {
+  it("rejects a string, which would otherwise spread its character indices", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prism-cluster-str-"));
+    const d = join(dir, "octocat-my-repo");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "config.json"), JSON.stringify({ cluster: "acme" }));
+    try {
+      expect(() => loadRepoConfig(dir, "octocat", "my-repo")).toThrow(/cluster must be an object/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

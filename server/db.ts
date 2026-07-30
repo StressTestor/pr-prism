@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
+import type { IncidentWindow } from "../src/incident.js";
 import { VectorStore } from "../src/store.js";
 
 export interface RepoStatus {
@@ -36,16 +37,15 @@ export function openRepoDB(
   repo: string,
   dimensions?: number,
   model?: string,
+  /** Repository-wide close events from this repo's config.json. Omitted by
+   * callers that do not rank, since the flag only affects ranking. */
+  incidentWindows: readonly IncidentWindow[] = [],
 ): VectorStore {
   const dbPath = getRepoDBPath(dataDir, owner, repo);
-  // NOTE: no incident windows. Incident-aware ranking is CLI-only for now:
-  // ServerConfig has no `incidents` field and the scheduler fetches open items
-  // only, so `closedAt` is never populated on this path. Wiring the App path
-  // needs a config field, a scheduler that fetches closed items, and the
-  // triage.ts metadata literal fixed. Tracked in #27. ServerConfig also has no
-  // `cluster` field, so `cluster.bot_authors` and `cluster.include_bot_authors`
-  // do not reach this path either; only the built-in bot list in bots.ts applies.
-  return new VectorStore(dbPath, dimensions, model);
+  // Incident windows are the store's business because the flag is derived at
+  // hydration. The `cluster` block is not: it reaches findDuplicateClusters and
+  // the triage matcher directly from each repo's config.json, not through here.
+  return new VectorStore(dbPath, dimensions, model, { incidentWindows });
 }
 
 /** Returns item count, embedding count, and last sync time for a repo DB. */
@@ -103,7 +103,8 @@ export function getItemCountSince(dataDir: string, owner: string, repo: string, 
 
   const db = new Database(dbPath, { readonly: true });
   try {
-    const row = db.prepare("SELECT COUNT(*) as c FROM items WHERE repo = ? AND created_at >= ?")
+    const row = db
+      .prepare("SELECT COUNT(*) as c FROM items WHERE repo = ? AND created_at >= ?")
       .get(`${owner}/${repo}`, since) as { c: number } | undefined;
     return row?.c ?? 0;
   } finally {
