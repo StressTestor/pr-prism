@@ -1,6 +1,7 @@
+import { isBotAuthor } from "../src/bots.js";
 import { selectCanonical } from "../src/canonical.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "../src/embeddings.js";
-import { itemMetadata } from "../src/metadata.js";
+import type { ItemMetadata } from "../src/metadata.js";
 import { cosineSimilarity, isZeroVector } from "../src/similarity.js";
 import type { StoreItem } from "../src/types.js";
 import { isRepoScanning, openRepoDB, queueWebhook } from "./db.js";
@@ -28,6 +29,8 @@ export interface TriageConfig {
   similarityThreshold: number;
   autoClose: boolean;
   autoCloseThreshold: number;
+  /** This repo's `cluster` block. Absent means the built-in bot list only. */
+  cluster?: { includeBotAuthors: boolean; botAuthors: string[] };
 }
 
 export async function triageNewItem(
@@ -39,6 +42,9 @@ export async function triageNewItem(
 ): Promise<TriageResult> {
   const start = performance.now();
   const { owner, name: repoName, fullName: repo } = event.repo;
+
+  const botLogins = new Set(config.cluster?.botAuthors ?? []);
+  const includeBots = config.cluster?.includeBotAuthors ?? false;
 
   const empty: TriageResult = {
     repo,
@@ -53,6 +59,15 @@ export async function triageNewItem(
   // if repo is still doing its initial backlog scan, queue and bail
   if (isRepoScanning(owner, repoName)) {
     queueWebhook(owner, repoName, event);
+    empty.elapsedMs = performance.now() - start;
+    return empty;
+  }
+
+  // Automation reuses titles for unrelated content, so consecutive bot items
+  // read as near-identical. Clustering already excludes them; commenting "this
+  // looks like a duplicate" on a bot's PR is the same noise posted to someone's
+  // repository. Bail before embedding, so it costs nothing either.
+  if (!includeBots && isBotAuthor({ author: event.sender }, botLogins)) {
     empty.elapsedMs = performance.now() - start;
     return empty;
   }
@@ -94,32 +109,17 @@ export async function triageNewItem(
     // alone: upsert replaces metadata_json wholesale, and a webhook arriving
     // after a backlog scan would otherwise drop everything that scan learned.
     const existing = (store.getItem(id)?.metadata ?? {}) as Record<string, unknown>;
-    // Names come from the shared helper so they cannot drift from the scan
-    // path. Values come only from the event; a field it cannot observe is left
-    // as stored rather than asserted empty, since `labels: []` would claim the
-    // item has no labels rather than that the webhook did not look.
-    const shape = itemMetadata({
-      number: event.number,
-      type: itemType,
-      repo,
-      title: event.title,
-      body: event.body || "",
-      state: "open",
-      author: event.sender,
-      createdAt: now,
-      updatedAt: now,
-      labels: [],
-    });
-    const observed: Record<string, unknown> = {
+    // Only the fields the event can observe. Typed as a subset of what
+    // itemMetadata produces, so a rename there breaks the build here rather
+    // than silently writing a key nothing reads. A field the webhook cannot
+    // see is left as stored: `labels: []` would claim the item has none rather
+    // than that the webhook did not look.
+    const observed: Partial<ItemMetadata> = {
       author: event.sender,
       state: "open",
-      bodyLength: shape.bodyLength,
+      bodyLength: (event.body || "").length,
     };
-    const metadata: Record<string, unknown> = { ...existing };
-    for (const key of Object.keys(observed)) {
-      if (!(key in shape)) throw new Error(`triage metadata key "${key}" is not part of itemMetadata`);
-      metadata[key] = observed[key];
-    }
+    const metadata: Record<string, unknown> = { ...existing, ...observed };
 
     const storeItem: StoreItem = {
       id,
@@ -156,6 +156,20 @@ export async function triageNewItem(
       if (sim >= config.similarityThreshold) {
         const item = itemMap.get(id);
         if (!item) continue;
+        // Same rule on the other side: a bot's PR is not a useful "you
+        // duplicated this" answer for a human contributor.
+        if (
+          !includeBots &&
+          isBotAuthor(
+            {
+              author: (item.metadata?.author as string) ?? "",
+              authorIsBot: item.metadata?.authorIsBot as boolean | undefined,
+            },
+            botLogins,
+          )
+        ) {
+          continue;
+        }
 
         matches.push({
           number: item.number,

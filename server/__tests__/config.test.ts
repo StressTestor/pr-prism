@@ -311,3 +311,40 @@ describe("repo cluster config", () => {
     expect(loadRepoConfig(dataDir, "octocat", "my-repo").cluster.includeBotAuthors).toBe(true);
   });
 });
+
+describe("repo config hostile input", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-repo-hostile-"));
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  function write(config: unknown) {
+    const dir = join(dataDir, "octocat-my-repo");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), JSON.stringify(config));
+  }
+
+  it("rejects a botAuthors that is not a list of strings", () => {
+    // config.json is hand-editable. Without a check this reaches
+    // `new Set(42)` inside the scheduler, far from the file that caused it.
+    write({ cluster: { botAuthors: 42 } });
+    expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/botAuthors/);
+  });
+
+  it("rejects a non-boolean includeBotAuthors", () => {
+    write({ cluster: { includeBotAuthors: "yes" } });
+    expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/includeBotAuthors/);
+  });
+
+  it("rejects incidents that is not a list", () => {
+    write({ incidents: "yes" });
+    expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/incidents/);
+  });
+});

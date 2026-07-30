@@ -101,11 +101,32 @@ export function loadRepoConfig(dataDir: string, owner: string, repo: string): Re
     ...parsed,
     cluster: { ...DEFAULT_REPO_CONFIG.cluster, ...(parsed.cluster ?? {}) },
   };
-  // Deliberately outside the catch above. A file we could not read at all is
-  // one thing; a readable one declaring a window we cannot honour is another,
-  // and silently treating it as "no incident" would rank the affected backlog
-  // as rejected, which is the failure this setting exists to prevent.
-  compileIncidentWindows(merged.incidents ?? []);
+
+  // Everything below is deliberately outside the catch above. A file we could
+  // not read at all is one thing; a readable one declaring settings we cannot
+  // honour is another. Silently defaulting those would rank an incident backlog
+  // as rejected, or ignore a repo's bot logins, which are the exact failures
+  // these settings exist to prevent.
+  //
+  // The cast to Partial<RepoConfig> above is a claim about a hand-editable file,
+  // not a fact, so the shapes that reach other modules are checked here rather
+  // than failing later as `new Set(42)` somewhere in the scheduler.
+  if (!Array.isArray(merged.incidents)) {
+    throw new Error(`${configPath}: incidents must be a list of {start, end, reason} objects`);
+  }
+  if (typeof merged.cluster.includeBotAuthors !== "boolean") {
+    throw new Error(`${configPath}: cluster.includeBotAuthors must be true or false`);
+  }
+  if (
+    !Array.isArray(merged.cluster.botAuthors) ||
+    merged.cluster.botAuthors.some((login) => typeof login !== "string" || login.trim() === "")
+  ) {
+    throw new Error(`${configPath}: cluster.botAuthors must be a list of non-empty login strings`);
+  }
+  // Compiled here for its validation, and the result discarded on purpose: the
+  // store compiles its own copy from the same raw windows. Bounds are cheap to
+  // parse and the alternative is threading a second type through openRepoDB.
+  compileIncidentWindows(merged.incidents);
   return merged;
 }
 

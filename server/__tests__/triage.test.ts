@@ -432,3 +432,97 @@ describe("triageNewItem stored metadata", () => {
     expect(stored.labels).toEqual(["bug"]);
   });
 });
+
+describe("triageNewItem bot filtering", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-triage-bots-"));
+    setRepoScanning("octocat", "my-repo", false);
+    mockEmbedResult = VEC_A;
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  const event = (over: Partial<WebhookEvent> = {}): WebhookEvent => ({
+    action: "opened",
+    eventType: "pull_request",
+    number: 90,
+    title: "chore(deps): bump the npm group with 2 updates",
+    body: "bumps things",
+    repo: { owner: "octocat", name: "my-repo", fullName: "octocat/my-repo" },
+    sender: "human-dev",
+    ...over,
+  });
+
+  const cfg = (over: Record<string, unknown> = {}) => ({
+    dataDir,
+    jinaApiKey: "fake-key",
+    similarityThreshold: 0.8,
+    autoClose: false,
+    autoCloseThreshold: 0.95,
+    cluster: { includeBotAuthors: false, botAuthors: [] },
+    ...over,
+  });
+
+  function seedBot(number: number) {
+    const store = openRepoDB(dataDir, "octocat", "my-repo", DIMS, "jina-embeddings-v3");
+    store.upsert({
+      id: `octocat/my-repo:pr:${number}`,
+      type: "pr",
+      number,
+      repo: "octocat/my-repo",
+      title: "chore(deps): bump the npm group with 2 updates",
+      bodySnippet: "",
+      embedding: new Float32Array(VEC_B),
+      metadata: { author: "dependabot[bot]", authorIsBot: true, state: "open" },
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+    store.close();
+  }
+
+  it("does not comment when the incoming item is bot-authored", async () => {
+    // dependabot reuses titles, so consecutive bot PRs read as near-identical.
+    // #26 removed that noise from clustering; posting it as a webhook comment
+    // on someone's repository is the same noise, just louder.
+    seedBot(80);
+    const { triageNewItem } = await import("../triage.js");
+    const result = await triageNewItem(event({ sender: "dependabot[bot]" }), cfg() as never, async () => {});
+    expect(result.commented).toBe(false);
+    expect(result.matches).toHaveLength(0);
+  });
+
+  it("does not offer a bot-authored item as a duplicate of a human PR", async () => {
+    seedBot(80);
+    const { triageNewItem } = await import("../triage.js");
+    const result = await triageNewItem(event(), cfg() as never, async () => {});
+    expect(result.matches.map((m) => m.number)).not.toContain(80);
+  });
+
+  it("still triages bots when the repo opts in", async () => {
+    seedBot(80);
+    const { triageNewItem } = await import("../triage.js");
+    const result = await triageNewItem(
+      event({ sender: "dependabot[bot]" }),
+      cfg({ cluster: { includeBotAuthors: true, botAuthors: [] } }) as never,
+      async () => {},
+    );
+    expect(result.matches.map((m) => m.number)).toContain(80);
+  });
+
+  it("honours repo-specific bot logins", async () => {
+    seedBot(80);
+    const { triageNewItem } = await import("../triage.js");
+    const result = await triageNewItem(
+      event({ sender: "acme-ci" }),
+      cfg({ cluster: { includeBotAuthors: false, botAuthors: ["acme-ci"] } }) as never,
+      async () => {},
+    );
+    expect(result.commented).toBe(false);
+  });
+});

@@ -9,7 +9,30 @@ import type { PRItem } from "./types.js";
  * server imports it and should not pull a spinner, a GitHub client and an
  * embedder factory along with it.
  */
-export function itemMetadata(item: PRItem): Record<string, unknown> {
+/**
+ * The stored-metadata shape. Named so a partial writer (the webhook path, which
+ * can only observe some fields) is checked against it by the compiler instead
+ * of asserting the key names at runtime.
+ */
+export type ItemMetadata = {
+  author: string;
+  authorIsBot: boolean | undefined;
+  state: string;
+  closedAt: string | undefined;
+  labels: string[];
+  additions: number | undefined;
+  deletions: number | undefined;
+  changedFiles: number | undefined;
+  ciStatus: PRItem["ciStatus"];
+  reviewCount: number | undefined;
+  hasTests: boolean | undefined;
+  bodyLength: number;
+  nodeId: string | undefined;
+  headRefOid: string | undefined;
+  closesIssues: number[] | undefined;
+};
+
+export function itemMetadata(item: PRItem): ItemMetadata {
   return {
     author: item.author,
     authorIsBot: item.authorIsBot,

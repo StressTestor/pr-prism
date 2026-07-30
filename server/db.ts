@@ -42,10 +42,9 @@ export function openRepoDB(
   incidentWindows: readonly IncidentWindow[] = [],
 ): VectorStore {
   const dbPath = getRepoDBPath(dataDir, owner, repo);
-  // NOTE: `cluster.*` config still does not reach this path. ServerConfig has
-  // no `cluster` field, so a repo-specific `cluster.bot_authors` is honoured by
-  // the CLI and ignored here; only the built-in bot list in bots.ts applies.
-  // Tracked in #27.
+  // Incident windows are the store's business because the flag is derived at
+  // hydration. The `cluster` block is not: it reaches findDuplicateClusters and
+  // the triage matcher directly from each repo's config.json, not through here.
   return new VectorStore(dbPath, dimensions, model, { incidentWindows });
 }
 

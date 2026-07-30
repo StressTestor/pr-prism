@@ -37,6 +37,7 @@ function triageConfigFor(owner: string, repo: string): TriageConfig {
     similarityThreshold: repoConfig.similarityThreshold,
     autoClose: repoConfig.autoClose,
     autoCloseThreshold: repoConfig.autoCloseThreshold,
+    cluster: repoConfig.cluster,
   };
 }
 
