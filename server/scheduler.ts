@@ -3,6 +3,7 @@ import { findDuplicateClusters } from "../src/cluster.js";
 import { createEmbeddingProvider, prepareEmbeddingText } from "../src/embeddings.js";
 import { GitHubClient } from "../src/github.js";
 import type { IncidentWindow } from "../src/incident.js";
+import { loadRepoConfig, type RepoClusterConfig } from "./config.js";
 import { itemMetadata } from "../src/metadata.js";
 import { escapeTableCell } from "../src/sanitize.js";
 import type { Cluster, PRItem, StoreItem } from "../src/types.js";
@@ -27,6 +28,9 @@ export interface BacklogScanConfig {
    * declared the scan also fetches closed items, since a window can only match
    * against a `closedAt` the scan actually captured. */
   incidents?: IncidentWindow[];
+  /** This repo's `cluster` block. Without it the App would honour only the
+   * built-in bot list while the CLI honoured the repo's own additions. */
+  cluster?: RepoClusterConfig;
 }
 
 /**
@@ -208,6 +212,8 @@ export async function runBacklogScan(
       const clusters = findDuplicateClusters(store, items, {
         threshold: config.similarityThreshold,
         repo: fullName,
+        includeBotAuthors: config.cluster?.includeBotAuthors,
+        botAuthors: new Set(config.cluster?.botAuthors ?? []),
       });
       console.log(`[backlog] ${fullName}: found ${clusters.length} duplicate clusters`);
 
@@ -266,10 +272,11 @@ export async function runBacklogScan(
 
 // --- weekly digest ---
 
+/** The digest reads per-repo settings itself, so it needs only the location of
+ * the data directory. A global threshold here would be a lie: it applied to
+ * every repo regardless of that repo's own configuration. */
 export interface WeeklyDigestConfig {
   dataDir: string;
-  similarityThreshold: number;
-  autoClose: boolean;
 }
 
 export interface RepoDigestData {
@@ -376,16 +383,23 @@ export function startWeeklyDigest(
             const status = getRepoStatus(config.dataDir, owner, repo);
             const newItems = getItemCountSince(config.dataDir, owner, repo, lastMonday);
 
-            // run clustering to get current cluster state
+            // run clustering to get current cluster state. per-repo config is
+            // loaded here rather than taken from the digest's global config:
+            // otherwise the digest reports different clusters than the backlog
+            // scan for the same repo, having applied neither its incident
+            // windows nor its bot logins.
+            const repoConfig = loadRepoConfig(config.dataDir, owner, repo);
             let clusters: Cluster[] = [];
             try {
-              const store = openRepoDB(config.dataDir, owner, repo);
+              const store = openRepoDB(config.dataDir, owner, repo, undefined, undefined, repoConfig.incidents);
               try {
                 const items = store.getAllItems(fullName) as unknown as PRItem[];
                 if (items.length > 0) {
                   clusters = findDuplicateClusters(store, items, {
-                    threshold: config.similarityThreshold,
+                    threshold: repoConfig.similarityThreshold,
                     repo: fullName,
+                    includeBotAuthors: repoConfig.cluster.includeBotAuthors,
+                    botAuthors: new Set(repoConfig.cluster.botAuthors),
                   });
                 }
               } finally {

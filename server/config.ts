@@ -11,10 +11,19 @@ export interface ServerConfig {
   dataDir: string;
 }
 
+/** Mirrors the CLI's `cluster:` block, in this file's camelCase. */
+export interface RepoClusterConfig {
+  /** Cluster bot-authored items too. Off by default; see src/bots.ts. */
+  includeBotAuthors: boolean;
+  /** Extra bot logins for this repo, added to the built-in list. */
+  botAuthors: string[];
+}
+
 export interface RepoConfig {
   /** Repository-wide events that closed items for reasons unrelated to their
    * quality. PRs closed inside a window rank as open. See src/incident.ts. */
   incidents: IncidentWindow[];
+  cluster: RepoClusterConfig;
   autoClose: boolean;
   autoCloseThreshold: number;
   similarityThreshold: number;
@@ -24,6 +33,7 @@ export interface RepoConfig {
 
 export const DEFAULT_REPO_CONFIG: RepoConfig = {
   incidents: [],
+  cluster: { includeBotAuthors: false, botAuthors: [] },
   autoClose: false,
   autoCloseThreshold: 0.95,
   similarityThreshold: 0.85,
@@ -83,8 +93,14 @@ export function loadRepoConfig(dataDir: string, owner: string, repo: string): Re
     return { ...DEFAULT_REPO_CONFIG };
   }
 
-  // merge with defaults so any missing keys get sane values
-  const merged = { ...DEFAULT_REPO_CONFIG, ...parsed };
+  // merge with defaults so any missing keys get sane values. `cluster` is
+  // merged a level deeper: a config setting only `botAuthors` should keep the
+  // default `includeBotAuthors`, not lose it to a wholesale block replacement.
+  const merged = {
+    ...DEFAULT_REPO_CONFIG,
+    ...parsed,
+    cluster: { ...DEFAULT_REPO_CONFIG.cluster, ...(parsed.cluster ?? {}) },
+  };
   // Deliberately outside the catch above. A file we could not read at all is
   // one thing; a readable one declaring a window we cannot honour is another,
   // and silently treating it as "no incident" would rank the affected backlog

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { loadServerConfig, loadRepoConfig, DEFAULT_REPO_CONFIG } from "./config.js";
+import { loadServerConfig, loadRepoConfig } from "./config.js";
 import { parseWebhookEvent, verifyWebhookSignature } from "./webhook.js";
 import { triageNewItem } from "./triage.js";
 import type { TriageConfig } from "./triage.js";
@@ -216,6 +216,7 @@ app.post("/webhook", async (c) => {
         githubToken: installToken,
         similarityThreshold: repoConfig.similarityThreshold,
         incidents: repoConfig.incidents,
+        cluster: repoConfig.cluster,
       };
 
       runBacklogScan(owner, repo, backlogConfig, callbacks.postIssue, {
@@ -284,11 +285,7 @@ app.post("/webhook", async (c) => {
 // weekly digest doesn't have an installation context at cron time,
 // so we log a warning instead of posting if no installation is available
 startWeeklyDigest(
-  {
-    dataDir: serverConfig.dataDir,
-    similarityThreshold: DEFAULT_REPO_CONFIG.similarityThreshold,
-    autoClose: DEFAULT_REPO_CONFIG.autoClose,
-  },
+  { dataDir: serverConfig.dataDir },
   async (fullName: string, title: string, body: string): Promise<void> => {
     // the weekly digest fires on a cron, not from a webhook, so we don't have
     // an installation ID in context. we need to look it up from cached tokens

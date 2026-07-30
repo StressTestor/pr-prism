@@ -101,6 +101,7 @@ describe("loadRepoConfig", () => {
   it("reads config from disk", () => {
     const custom: RepoConfig = {
       incidents: [],
+      cluster: { includeBotAuthors: false, botAuthors: [] },
       autoClose: true,
       autoCloseThreshold: 0.9,
       similarityThreshold: 0.75,
@@ -192,6 +193,7 @@ describe("saveRepoConfig", () => {
   it("roundtrips correctly", () => {
     const custom: RepoConfig = {
       incidents: [],
+      cluster: { includeBotAuthors: false, botAuthors: [] },
       autoClose: true,
       autoCloseThreshold: 0.92,
       similarityThreshold: 0.7,
@@ -268,5 +270,44 @@ describe("repo incident windows", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "config.json"), "{ not json");
     expect(loadRepoConfig(dataDir, "octocat", "my-repo")).toEqual(DEFAULT_REPO_CONFIG);
+  });
+});
+
+describe("repo cluster config", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-repo-cluster-"));
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  function write(config: unknown) {
+    const dir = join(dataDir, "octocat-my-repo");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), JSON.stringify(config));
+  }
+
+  it("defaults to excluding bots with no extra logins", () => {
+    const cfg = loadRepoConfig(dataDir, "octocat", "my-repo");
+    expect(cfg.cluster.includeBotAuthors).toBe(false);
+    expect(cfg.cluster.botAuthors).toEqual([]);
+  });
+
+  it("loads repo-specific bot logins", () => {
+    write({ cluster: { botAuthors: ["acme-ci"] } });
+    const cfg = loadRepoConfig(dataDir, "octocat", "my-repo");
+    expect(cfg.cluster.botAuthors).toEqual(["acme-ci"]);
+    // merged with the default, not replacing the whole block
+    expect(cfg.cluster.includeBotAuthors).toBe(false);
+  });
+
+  it("can opt bots back in", () => {
+    write({ cluster: { includeBotAuthors: true } });
+    expect(loadRepoConfig(dataDir, "octocat", "my-repo").cluster.includeBotAuthors).toBe(true);
   });
 });
