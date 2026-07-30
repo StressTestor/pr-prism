@@ -16,6 +16,35 @@ export interface VectorStoreOptions {
   incidentWindows?: readonly IncidentWindow[];
 }
 
+/**
+ * Bumped when the on-disk vector representation changes. Stores written under
+ * an older value are refused by search() rather than silently answered with
+ * wrong similarities, because a raw vector and a normalised one are
+ * indistinguishable once written.
+ */
+export const VECTOR_GEOMETRY_VERSION = "1";
+
+/**
+ * vec0 has no cosine mode here: the table is declared without a distance
+ * metric, so sqlite-vec returns L2. For unit vectors L2 and cosine are the same
+ * ordering and convert exactly, which is why vectors are normalised on write
+ * and similarity is derived rather than assumed.
+ */
+function toUnitVector(v: Float32Array): Float32Array {
+  let sum = 0;
+  for (const x of v) sum += x * x;
+  const mag = Math.sqrt(sum);
+  if (mag === 0 || Math.abs(mag - 1) < 1e-6) return v;
+  const out = new Float32Array(v.length);
+  for (let i = 0; i < v.length; i++) out[i] = v[i] / mag;
+  return out;
+}
+
+/** L2 between unit vectors is sqrt(2 - 2cos), so cos = 1 - d^2 / 2. */
+export function l2DistanceToCosine(distance: number): number {
+  return 1 - (distance * distance) / 2;
+}
+
 export class VectorStore {
   private db: Database.Database;
   private incidentWindows: readonly CompiledIncidentWindow[];
@@ -48,6 +77,21 @@ export class VectorStore {
 
     // Metadata table — must exist before any checks
     this.db.exec("CREATE TABLE IF NOT EXISTS prism_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+
+    // Decide the store's vector geometry once, at open. An unmarked store with
+    // vectors already in it predates normalisation, so it is recorded as 0 and
+    // search refuses it until backfilled; an unmarked empty store is simply new.
+    if (this.getMeta("vector_geometry_version") === undefined) {
+      const hasVectors =
+        (
+          this.db.prepare("SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='vec_items'").get() as {
+            c: number;
+          }
+        ).c > 0
+          ? (this.db.prepare("SELECT COUNT(*) as c FROM vec_items").get() as { c: number }).c > 0
+          : false;
+      this.setMeta("vector_geometry_version", hasVectors ? "0" : VECTOR_GEOMETRY_VERSION);
+    }
 
     // Validate dimensions if vec_items already exists
     const tableCheck = this.db
@@ -189,10 +233,11 @@ export class VectorStore {
   }
 
   upsertEmbeddingOnly(id: string, embedding: Float32Array): void {
+    const unit = toUnitVector(embedding);
     this.db.prepare("DELETE FROM vec_items WHERE id = ?").run(id);
     this.db
       .prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)")
-      .run(id, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength));
+      .run(id, Buffer.from(unit.buffer, unit.byteOffset, unit.byteLength));
   }
 
   upsert(item: StoreItem): void {
@@ -221,12 +266,58 @@ export class VectorStore {
       );
 
     this.db.prepare("DELETE FROM vec_items WHERE id = ?").run(id);
+    const unit = toUnitVector(item.embedding);
     this.db
       .prepare("INSERT INTO vec_items (id, embedding) VALUES (?, ?)")
-      .run(id, Buffer.from(item.embedding.buffer, item.embedding.byteOffset, item.embedding.byteLength));
+      .run(id, Buffer.from(unit.buffer, unit.byteOffset, unit.byteLength));
+  }
+
+  /**
+   * Refuse to answer from a store written under an older geometry. Checked on
+   * read, not on write: the dangerous case is a database created before this
+   * change being opened by a binary that assumes the new one, which no
+   * insert-time assertion can see.
+   */
+  private assertVectorGeometry(): void {
+    const stored = this.getMeta("vector_geometry_version");
+    if (stored !== VECTOR_GEOMETRY_VERSION) {
+      throw new Error(
+        `this database was written with vector geometry ${stored ?? "0"}, but this version expects ${VECTOR_GEOMETRY_VERSION}. ` +
+          "Vectors are now normalised on write and similarity is derived as 1 - d^2/2; searching the old " +
+          "representation returns wrong similarities rather than failing. Run `prism re-embed` or call " +
+          "backfillVectorGeometry() to convert in place.",
+      );
+    }
+  }
+
+  /**
+   * Normalise every stored vector in place and stamp the current geometry.
+   * Ships with the version check rather than after it: without this, the guard
+   * turns every existing database into one that refuses to search.
+   */
+  backfillVectorGeometry(): number {
+    const rows = this.db.prepare("SELECT id, embedding FROM vec_items").all() as Array<{
+      id: string;
+      embedding: Buffer;
+    }>;
+    const update = this.db.prepare("UPDATE vec_items SET embedding = ? WHERE id = ?");
+    let changed = 0;
+    const run = this.db.transaction(() => {
+      for (const row of rows) {
+        const raw = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.length / 4);
+        const unit = toUnitVector(raw);
+        update.run(Buffer.from(unit.buffer, unit.byteOffset, unit.byteLength), row.id);
+        changed++;
+      }
+    });
+    run();
+    this.setMeta("vector_geometry_version", VECTOR_GEOMETRY_VERSION);
+    return changed;
   }
 
   search(embedding: Float32Array, limit = 20, threshold = 0.0): Array<{ id: string; distance: number }> {
+    this.assertVectorGeometry();
+    const query = toUnitVector(embedding);
     const rows = this.db
       .prepare(`
       SELECT id, distance
@@ -235,14 +326,12 @@ export class VectorStore {
       ORDER BY distance
       LIMIT ?
     `)
-      .all(Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), limit) as Array<{
+      .all(Buffer.from(query.buffer, query.byteOffset, query.byteLength), limit) as Array<{
       id: string;
       distance: number;
     }>;
 
-    // sqlite-vec returns cosine distance when using vec0 with float arrays
-    // cosine similarity = 1 - cosine distance
-    return rows.filter((r) => 1 - r.distance >= threshold);
+    return rows.filter((r) => l2DistanceToCosine(r.distance) >= threshold);
   }
 
   getItem(id: string): StoreItem | undefined {

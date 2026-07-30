@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { effectiveEmbeddingConfigHash, embeddingConfigHash } from "../embeddings.js";
 import { parseDuration, reEmbedStoredItems, runScan } from "../pipeline.js";
-import { VectorStore } from "../store.js";
+import { VECTOR_GEOMETRY_VERSION, VectorStore } from "../store.js";
 import type { PipelineContext, PRItem, StoreItem } from "../types.js";
 
 afterEach(() => {
@@ -191,7 +191,7 @@ describe("re-embed configuration identity", () => {
       );
 
       expect(embedBatch).toHaveBeenCalledOnce();
-      expect(store.getEmbedding("owner/repo:issue:1")).toEqual(new Float32Array([0.5, 0.5]));
+      expect(store.getEmbedding("owner/repo:issue:1")).toEqual(new Float32Array([1 / Math.SQRT2, 1 / Math.SQRT2]));
       expect(store.getMeta("embedding_config_hash")).toBe(effectiveEmbeddingConfigHash(providerConfig, 2));
       expect(store.getMeta("embedding_config_hash")).toContain(":vprovider-selected-v1");
     } finally {
@@ -350,6 +350,44 @@ describe("runScan metadata refresh dirty check", () => {
       expect(spy).toHaveBeenCalledTimes(1);
     } finally {
       spy.mockRestore();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("re-embed clears the geometry guard", () => {
+  it("stamps the current vector geometry, since it rewrote every vector", async () => {
+    // The guard's error message tells the operator to run `prism re-embed`.
+    // If that did not clear the marker, the advice would be wrong and the
+    // database would keep refusing to search after being fixed.
+    const dir = mkdtempSync(join(tmpdir(), "prism-reembed-geo-"));
+    const store = new VectorStore(join(dir, "t.db"), 2);
+    try {
+      store.upsert({
+        id: "owner/repo:issue:1",
+        type: "issue",
+        number: 1,
+        repo: "owner/repo",
+        title: "t",
+        bodySnippet: "",
+        embedding: new Float32Array([1, 0]),
+        metadata: { author: "a", state: "open" },
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      });
+      store.setMeta("vector_geometry_version", "0");
+
+      await reEmbedStoredItems(
+        store,
+        store.getAllItems("owner/repo"),
+        { dimensions: 2, embed: vi.fn(), embedBatch: vi.fn(async (t: string[]) => t.map(() => [0.5, 0.5])) },
+        { provider: "ollama", model: "m" },
+        10,
+      );
+      expect(store.getMeta("vector_geometry_version")).toBe(VECTOR_GEOMETRY_VERSION);
+      expect(() => store.search(new Float32Array([1, 0]), 5, 0.5)).not.toThrow();
+    } finally {
       store.close();
       rmSync(dir, { recursive: true, force: true });
     }

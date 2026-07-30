@@ -46,6 +46,8 @@ src/                    # CLI tool (published to npm as prism-triage)
   write-gate.ts         # one dry-run-by-default gate every GitHub mutation funnels through (read-only ethos)
   benchmark.ts          # embedding provider benchmark tool (--out per-run results + cluster membership)
   bots.ts               # bot-author detection; excluded from clustering by default
+  # store.ts: vectors are normalised on write; similarity is 1 - d^2/2 because
+  # vec0 is L2. VECTOR_GEOMETRY_VERSION guards stores written before that.
   incident.ts           # incident windows: compile once, match closedAt at read time
   metadata.ts           # the stored-metadata shape, shared by the CLI and App paths
   config.ts             # Zod-validated YAML + env config

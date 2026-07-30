@@ -435,3 +435,90 @@ describe("bot authorship round-trip", () => {
     expect(read.authorIsBot).toBe(true);
   });
 });
+
+describe("vector geometry", () => {
+  const dbs: string[] = [];
+  afterEach(() => {
+    for (const db of dbs) {
+      try {
+        rmSync(resolve(db, ".."), { recursive: true, force: true });
+      } catch {}
+    }
+    dbs.length = 0;
+  });
+
+  function open(dims = 2) {
+    const p = tmpDb();
+    dbs.push(p);
+    return new VectorStore(p, dims);
+  }
+
+  function put(store: VectorStore, id: string, emb: number[]) {
+    store.upsert({
+      id,
+      type: "pr",
+      number: Number(id.split(":").pop()),
+      repo: "o/r",
+      title: id,
+      bodySnippet: "",
+      embedding: new Float32Array(emb),
+      metadata: { author: "a", state: "open" },
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+  }
+
+  it("search similarity matches exact cosine, not 1 - L2", () => {
+    // The table is L2. `1 - distance` is not cosine at any scale: for unit
+    // vectors L2 = sqrt(2 - 2cos), so a 0.85 threshold on `1 - d` silently
+    // meant cosine ~0.989 and pruned every genuine near-duplicate below that.
+    const store = open(2);
+    put(store, "o/r:pr:1", [1, 0]);
+    put(store, "o/r:pr:2", [Math.cos(0.3), Math.sin(0.3)]); // cos ~= 0.9553
+    const hits = store.search(new Float32Array([1, 0]), 10, 0.9);
+    store.close();
+    expect(hits.map((h) => h.id)).toContain("o/r:pr:2");
+  });
+
+  it("normalises on write, so a provider returning unnormalised vectors still works", () => {
+    // pr-prism does not require providers to return unit vectors, and the
+    // cosine conversion is only valid for them.
+    const store = open(2);
+    put(store, "o/r:pr:1", [3, 0]); // magnitude 3
+    put(store, "o/r:pr:2", [7, 0]); // magnitude 7, identical direction
+    const hits = store.search(new Float32Array([5, 0]), 10, 0.99);
+    store.close();
+    expect(hits.map((h) => h.id).sort()).toEqual(["o/r:pr:1", "o/r:pr:2"]);
+  });
+
+  it("refuses to search a store written under an older geometry", () => {
+    // A database written before normalisation holds raw vectors; searching it
+    // with the corrected formula returns confidently wrong similarities.
+    const p = tmpDb();
+    dbs.push(p);
+    const store = new VectorStore(p, 2);
+    put(store, "o/r:pr:1", [1, 0]);
+    store.setMeta("vector_geometry_version", "0");
+    store.close();
+
+    const reopened = new VectorStore(p, 2);
+    expect(() => reopened.search(new Float32Array([1, 0]), 10, 0.5)).toThrow(/geometry/i);
+    reopened.close();
+  });
+
+  it("backfills an older store in place", () => {
+    const p = tmpDb();
+    dbs.push(p);
+    const store = new VectorStore(p, 2);
+    put(store, "o/r:pr:1", [3, 0]);
+    store.setMeta("vector_geometry_version", "0");
+    store.close();
+
+    const reopened = new VectorStore(p, 2);
+    const migrated = reopened.backfillVectorGeometry();
+    const hits = reopened.search(new Float32Array([1, 0]), 10, 0.99);
+    reopened.close();
+    expect(migrated).toBe(1);
+    expect(hits.map((h) => h.id)).toContain("o/r:pr:1");
+  });
+});

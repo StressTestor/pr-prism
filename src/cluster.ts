@@ -94,43 +94,25 @@ export function findDuplicateClusters(store: VectorStore, items: PRItem[], opts:
   const ids = [...embeddings.keys()];
   const adjacency = new Map<string, Set<string>>();
 
-  // For large datasets, use ANN pre-filtering via store.search() to reduce candidate pairs
-  // For smaller datasets (< 5000), brute force is fast enough
-  const useANN = ids.length >= 5000;
-
-  if (useANN) {
-    // ANN candidate generation: for each item, find top-K nearest neighbors
-    // then verify with exact cosine similarity
-    const K = 50; // candidates per item
-    for (const id of ids) {
-      const emb = embeddings.get(id)!;
-      const candidates = store.search(emb, K, opts.threshold);
-      for (const { id: candidateId } of candidates) {
-        if (candidateId === id) continue;
-        if (!embeddings.has(candidateId)) continue;
-        // Verify with exact cosine similarity
-        const sim = cosineSimilarity(emb, embeddings.get(candidateId)!);
-        if (sim >= opts.threshold) {
-          if (!adjacency.has(id)) adjacency.set(id, new Set());
-          if (!adjacency.has(candidateId)) adjacency.set(candidateId, new Set());
-          adjacency.get(id)?.add(candidateId);
-          adjacency.get(candidateId)?.add(id);
-        }
-      }
-    }
-  } else {
-    // Brute force O(n²) — fine for < 5000 items
-    for (let i = 0; i < ids.length; i++) {
-      const embA = embeddings.get(ids[i])!;
-      for (let j = i + 1; j < ids.length; j++) {
-        const embB = embeddings.get(ids[j])!;
-        const sim = cosineSimilarity(embA, embB);
-        if (sim >= opts.threshold) {
-          if (!adjacency.has(ids[i])) adjacency.set(ids[i], new Set());
-          if (!adjacency.has(ids[j])) adjacency.set(ids[j], new Set());
-          adjacency.get(ids[i])?.add(ids[j]);
-          adjacency.get(ids[j])?.add(ids[i]);
-        }
+  // Every pair, exact cosine. There used to be a candidate-limited path above
+  // 5000 items that called store.search() with the clustering threshold, on the
+  // assumption it was an approximate index worth trading recall for. It was
+  // neither: sqlite-vec's vec0 KNN is itself a full scan with a LIMIT, so the
+  // path bought no speed, while the LIMIT truncated candidates and the
+  // threshold was compared against a distance on the wrong scale. On the 5285
+  // item corpus it found 26 clusters where exact pairwise finds 501, and took
+  // twice as long doing it. 5285 x 768 floats is milliseconds; there is nothing
+  // here to approximate.
+  for (let i = 0; i < ids.length; i++) {
+    const embA = embeddings.get(ids[i])!;
+    for (let j = i + 1; j < ids.length; j++) {
+      const embB = embeddings.get(ids[j])!;
+      const sim = cosineSimilarity(embA, embB);
+      if (sim >= opts.threshold) {
+        if (!adjacency.has(ids[i])) adjacency.set(ids[i], new Set());
+        if (!adjacency.has(ids[j])) adjacency.set(ids[j], new Set());
+        adjacency.get(ids[i])?.add(ids[j]);
+        adjacency.get(ids[j])?.add(ids[i]);
       }
     }
   }
