@@ -34,14 +34,31 @@ export interface BacklogScanConfig {
 }
 
 /**
- * Which lifecycle states a backlog scan fetches.
+ * Whether a backlog scan fetches closed items in addition to open ones.
  *
  * Closed items cost API calls and only earn them when a window could match
  * one: an incident window tests `closedAt`, which is absent unless the scan
- * captured it. A repo with no incidents declared keeps fetching open only.
+ * captured it. A repo with no incidents declared fetches open only.
  */
-export function backlogFetchState(incidents: readonly unknown[] | undefined): "all" | "open" {
-  return incidents && incidents.length > 0 ? "all" : "open";
+export function backlogFetchesClosed(incidents: readonly unknown[] | undefined): boolean {
+  return Boolean(incidents && incidents.length > 0);
+}
+
+/**
+ * The lower bound for a backlog scan's fetch.
+ *
+ * backlogFetchState only decides open-vs-all. Without a bound as well, a single
+ * declared window flips the scan to every closed item the repository has ever
+ * had, which for a large repo is most of its history. An item closed by an
+ * incident was necessarily updated at or after that window opened, so the
+ * earliest window start is a safe lower bound: GitHub filters on updated_at,
+ * which for these items is the close itself or later.
+ */
+export function backlogFetchSince(
+  incidents: readonly { start: string }[] | undefined,
+): string | undefined {
+  if (!incidents || incidents.length === 0) return undefined;
+  return incidents.reduce((earliest, w) => (Date.parse(w.start) < Date.parse(earliest) ? w.start : earliest), incidents[0].start);
 }
 
 /**
@@ -53,7 +70,7 @@ function formatTriageReport(owner: string, repo: string, totalItems: number, clu
   const totalDupes = clusters.reduce((s, c) => s + c.items.length, 0);
 
   let body = `## summary\n\n`;
-  body += `- **${totalItems}** open issues and PRs scanned\n`;
+  body += `- **${totalItems}** issues and PRs scanned\n`;
   body += `- **${clusters.length}** duplicate clusters found\n`;
   body += `- **${totalDupes}** items involved in duplicates\n\n`;
 
@@ -135,21 +152,29 @@ export async function runBacklogScan(
 
       // Closed items are only worth their API cost when a window could match
       // one. A repo with no incidents declared keeps fetching open items only.
-      const state = backlogFetchState(incidents);
-      const scope = state === "all" ? "open + closed" : "open";
+      // Open and closed are fetched separately on purpose. `since` aborts a
+      // fetch at the first item updated before it, and the lists are sorted by
+      // updated desc, so a single state:"all" call bounded by `since` would
+      // also drop open items nobody has touched lately - exactly the stale
+      // duplicates a backlog scan exists to find. Open is therefore unbounded,
+      // and only the closed pass carries the window bound.
+      console.log(`[backlog] ${fullName}: fetching open PRs...`);
+      const prs = await github.fetchPRs({ state: "open", maxItems: 5000, batchSize: 100 });
+      console.log(`[backlog] ${fullName}: fetching open issues...`);
+      const issues = await github.fetchIssues({ state: "open", maxItems: 5000, batchSize: 100 });
 
-      console.log(`[backlog] ${fullName}: fetching ${scope} PRs...`);
-      const prs = await github.fetchPRs({ state, maxItems: 5000, batchSize: 100 });
-      console.log(`[backlog] ${fullName}: fetched ${prs.length} PRs`);
-
-      console.log(`[backlog] ${fullName}: fetching ${scope} issues...`);
-      const issues = await github.fetchIssues({ state, maxItems: 5000, batchSize: 100 });
-      console.log(`[backlog] ${fullName}: fetched ${issues.length} issues`);
+      if (backlogFetchesClosed(incidents)) {
+        const since = backlogFetchSince(incidents);
+        console.log(`[backlog] ${fullName}: fetching closed items updated since ${since}...`);
+        prs.push(...(await github.fetchPRs({ state: "closed", since, maxItems: 5000, batchSize: 100 })));
+        issues.push(...(await github.fetchIssues({ state: "closed", since, maxItems: 5000, batchSize: 100 })));
+      }
+      console.log(`[backlog] ${fullName}: fetched ${prs.length} PRs, ${issues.length} issues`);
 
       const allItems: PRItem[] = [...prs, ...issues];
 
       if (allItems.length === 0) {
-        console.log(`[backlog] ${fullName}: no open items found, skipping`);
+        console.log(`[backlog] ${fullName}: no items found, skipping`);
         store.setMeta("last_sync", new Date().toISOString());
         return;
       }
@@ -245,6 +270,10 @@ export async function runBacklogScan(
       similarityThreshold: config.similarityThreshold,
       autoClose: false,
       autoCloseThreshold: 0.95,
+      // Drained events are triaged on the same terms as live ones. Omitting
+      // this would filter bots on the webhook that arrived a second later and
+      // not on the one that arrived during the scan.
+      cluster: config.cluster,
     };
 
     const postComment =

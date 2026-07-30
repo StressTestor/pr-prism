@@ -63,14 +63,6 @@ export async function triageNewItem(
     return empty;
   }
 
-  // Automation reuses titles for unrelated content, so consecutive bot items
-  // read as near-identical. Clustering already excludes them; commenting "this
-  // looks like a duplicate" on a bot's PR is the same noise posted to someone's
-  // repository. Bail before embedding, so it costs nothing either.
-  if (!includeBots && isBotAuthor({ author: event.sender }, botLogins)) {
-    empty.elapsedMs = performance.now() - start;
-    return empty;
-  }
 
   // set up embedding provider (Jina)
   const embedder = await createEmbeddingProvider({
@@ -134,6 +126,21 @@ export async function triageNewItem(
       updatedAt: now,
     };
     store.upsert(storeItem);
+
+    // Automation reuses titles for unrelated content, so consecutive bot items
+    // read as near-identical. Clustering already excludes them; commenting
+    // "this looks like a duplicate" on a bot's PR is that same noise, posted to
+    // someone's repository.
+    //
+    // Deliberately after the upsert, not before it. The backlog scan stores
+    // every item and filters at cluster time, so bailing earlier would make the
+    // database depend on which path saw the item, and flipping
+    // includeBotAuthors on would need a full rescan to become true. The cost is
+    // one embedding per bot item, which the scan path pays anyway.
+    if (!includeBots && isBotAuthor({ author: event.sender }, botLogins)) {
+      empty.elapsedMs = performance.now() - start;
+      return empty;
+    }
 
     // get all existing embeddings and items for this repo
     const allEmbeddings = store.getAllEmbeddings(repo);

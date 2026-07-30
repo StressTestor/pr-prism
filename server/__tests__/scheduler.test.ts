@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Cluster, ScoredPR } from "../../src/types.js";
 import { getItemCountSince, listInstalledRepos, openRepoDB } from "../db.js";
 import type { RepoDigestData } from "../scheduler.js";
-import { backlogFetchState, formatWeeklyDigest, getLastMonday } from "../scheduler.js";
+import { backlogFetchSince, backlogFetchesClosed, formatWeeklyDigest, getLastMonday } from "../scheduler.js";
 
 function makeScoredPR(number: number, title: string): ScoredPR {
   return {
@@ -329,15 +329,34 @@ describe("getItemCountSince", () => {
   });
 });
 
-describe("backlogFetchState", () => {
-  it("fetches open items only when no incident is declared", () => {
-    expect(backlogFetchState([])).toBe("open");
-    expect(backlogFetchState(undefined)).toBe("open");
+describe("backlogFetchesClosed", () => {
+  it("is false when no incident is declared", () => {
+    expect(backlogFetchesClosed([])).toBe(false);
+    expect(backlogFetchesClosed(undefined)).toBe(false);
   });
 
-  it("fetches closed items too once a window exists", () => {
+  it("is true once a window exists", () => {
     // A window matches on closedAt, which a scan can only record for items it
     // actually fetched. Fetching open-only would make every window match zero.
-    expect(backlogFetchState([{ start: "a", end: "b", reason: "c" }])).toBe("all");
+    expect(backlogFetchesClosed([{ start: "a", end: "b", reason: "c" }])).toBe(true);
+  });
+});
+
+describe("backlogFetchSince", () => {
+  it("is undefined when no incident is declared", () => {
+    expect(backlogFetchSince([])).toBeUndefined();
+    expect(backlogFetchSince(undefined)).toBeUndefined();
+  });
+
+  it("is the earliest window start, so closed items outside every window are not fetched", () => {
+    // Without this, one window flips the scan to every closed item the repo has
+    // ever had. An item closed by an incident was updated at or after that
+    // window opened, so the earliest start is a safe lower bound.
+    expect(
+      backlogFetchSince([
+        { start: "2026-07-23T09:00:00Z", end: "2026-07-23T11:00:00Z", reason: "b" },
+        { start: "2026-05-01T00:00:00Z", end: "2026-05-02T00:00:00Z", reason: "a" },
+      ]),
+    ).toBe("2026-05-01T00:00:00Z");
   });
 });

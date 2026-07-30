@@ -526,3 +526,52 @@ describe("triageNewItem bot filtering", () => {
     expect(result.commented).toBe(false);
   });
 });
+
+describe("triage bot items are still indexed", () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-triage-index-"));
+    setRepoScanning("octocat", "my-repo", false);
+    mockEmbedResult = VEC_A;
+  });
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  it("stores a bot-authored item even though it does not comment on it", async () => {
+    // The backlog scan stores every item and filters at cluster time. If the
+    // webhook path dropped bot items instead, the database would depend on
+    // which path saw the item, and flipping includeBotAuthors on would need a
+    // full rescan to become true.
+    const { triageNewItem } = await import("../triage.js");
+    const result = await triageNewItem(
+      {
+        action: "opened",
+        eventType: "pull_request",
+        number: 91,
+        title: "chore(deps): bump",
+        body: "b",
+        repo: { owner: "octocat", name: "my-repo", fullName: "octocat/my-repo" },
+        sender: "dependabot[bot]",
+      } as WebhookEvent,
+      {
+        dataDir,
+        jinaApiKey: "fake-key",
+        similarityThreshold: 0.8,
+        autoClose: false,
+        autoCloseThreshold: 0.95,
+        cluster: { includeBotAuthors: false, botAuthors: [] },
+      } as never,
+      async () => {},
+    );
+    expect(result.commented).toBe(false);
+
+    const store = openRepoDB(dataDir, "octocat", "my-repo", DIMS, "jina-embeddings-v3");
+    const stored = store.getByNumber("octocat/my-repo", 91);
+    store.close();
+    expect(stored).toBeDefined();
+    expect(stored?.metadata?.author).toBe("dependabot[bot]");
+  });
+});

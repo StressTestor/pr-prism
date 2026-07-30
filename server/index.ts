@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { loadServerConfig, loadRepoConfig } from "./config.js";
+import { loadRepoConfig, loadRepoConfigIsolated, loadServerConfig } from "./config.js";
 import { parseWebhookEvent, verifyWebhookSignature } from "./webhook.js";
 import { triageNewItem } from "./triage.js";
 import type { TriageConfig } from "./triage.js";
@@ -29,8 +29,9 @@ const app = new Hono();
  * Build a TriageConfig for a specific repo by merging server-level
  * settings with per-repo settings from config.json.
  */
-function triageConfigFor(owner: string, repo: string): TriageConfig {
-  const repoConfig = loadRepoConfig(serverConfig.dataDir, owner, repo);
+function triageConfigFor(owner: string, repo: string): TriageConfig | null {
+  const repoConfig = loadRepoConfigIsolated(serverConfig.dataDir, owner, repo);
+  if (!repoConfig) return null;
   return {
     dataDir: serverConfig.dataDir,
     jinaApiKey: serverConfig.jinaApiKey,
@@ -210,7 +211,10 @@ app.post("/webhook", async (c) => {
 
     // kick off backlog scans in the background (don't block webhook response)
     for (const { owner, repo, fullName } of installRepos) {
-      const repoConfig = loadRepoConfig(serverConfig.dataDir, owner, repo);
+      // Contained per repo: one unusable config.json must not abort the loop
+      // and silently skip every repo listed after it, on every redelivery.
+      const repoConfig = loadRepoConfigIsolated(serverConfig.dataDir, owner, repo);
+      if (!repoConfig) continue;
       const backlogConfig: BacklogScanConfig = {
         dataDir: serverConfig.dataDir,
         jinaApiKey: serverConfig.jinaApiKey,
@@ -259,7 +263,10 @@ app.post("/webhook", async (c) => {
   // triage in the background so the webhook responds quickly
   const triageConfig = triageConfigFor(event.repo.owner, event.repo.name);
 
-  if (triageConfig.jinaApiKey) {
+  // A null config means this repo's config.json is unusable; loadRepoConfigIsolated
+  // has already logged which repo and why. Acknowledge the delivery rather than
+  // 500ing, since GitHub would redeliver into the same deterministic failure.
+  if (triageConfig && triageConfig.jinaApiKey) {
     triageNewItem(event, triageConfig, callbacks.postComment, callbacks.closeIssue, callbacks.fetchFileContent)
       .then((result) => {
         if (result.commented) {

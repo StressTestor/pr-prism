@@ -111,6 +111,9 @@ export function loadRepoConfig(dataDir: string, owner: string, repo: string): Re
   // The cast to Partial<RepoConfig> above is a claim about a hand-editable file,
   // not a fact, so the shapes that reach other modules are checked here rather
   // than failing later as `new Set(42)` somewhere in the scheduler.
+  if (parsed.cluster !== undefined && (typeof parsed.cluster !== "object" || parsed.cluster === null || Array.isArray(parsed.cluster))) {
+    throw new Error(`${configPath}: cluster must be an object`);
+  }
   if (!Array.isArray(merged.incidents)) {
     throw new Error(`${configPath}: incidents must be a list of {start, end, reason} objects`);
   }
@@ -128,6 +131,31 @@ export function loadRepoConfig(dataDir: string, owner: string, repo: string): Re
   // parse and the alternative is threading a second type through openRepoDB.
   compileIncidentWindows(merged.incidents);
   return merged;
+}
+
+/**
+ * loadRepoConfig, contained to one repository.
+ *
+ * loadRepoConfig throws on a config it cannot honour, which is right: silently
+ * defaulting would rank an incident backlog as rejected or ignore a repo's bot
+ * logins. But the App iterates every repo in an installation, and one repo's
+ * hand-edited file must not abort that loop and silently skip the repos after
+ * it - a failure that repeats identically on every webhook redelivery.
+ *
+ * Returns null rather than defaults. A caller that skips the repo loudly is
+ * recoverable; one that proceeds on defaults has the misconfiguration hidden
+ * from it, which is what throwing was meant to prevent.
+ */
+export function loadRepoConfigIsolated(dataDir: string, owner: string, repo: string): RepoConfig | null {
+  try {
+    return loadRepoConfig(dataDir, owner, repo);
+  } catch (err) {
+    console.error(
+      `[config] ${owner}/${repo}: unusable config.json, this repo is skipped:`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 }
 
 /**

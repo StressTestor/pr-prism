@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RepoConfig } from "../config.js";
-import { DEFAULT_REPO_CONFIG, loadRepoConfig, loadServerConfig, saveRepoConfig } from "../config.js";
+import {
+  DEFAULT_REPO_CONFIG,
+  loadRepoConfig,
+  loadRepoConfigIsolated,
+  loadServerConfig,
+  saveRepoConfig,
+} from "../config.js";
 
 describe("loadServerConfig", () => {
   const originalEnv = { ...process.env };
@@ -346,5 +352,65 @@ describe("repo config hostile input", () => {
   it("rejects incidents that is not a list", () => {
     write({ incidents: "yes" });
     expect(() => loadRepoConfig(dataDir, "octocat", "my-repo")).toThrow(/incidents/);
+  });
+});
+
+describe("loadRepoConfigIsolated", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "prism-isolated-"));
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  function write(owner: string, repo: string, config: unknown) {
+    const dir = join(dataDir, `${owner}-${repo}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), JSON.stringify(config));
+  }
+
+  it("returns the config for a good repo", () => {
+    write("octocat", "good", { similarityThreshold: 0.7 });
+    expect(loadRepoConfigIsolated(dataDir, "octocat", "good")?.similarityThreshold).toBe(0.7);
+  });
+
+  it("returns null and names the repo instead of throwing", () => {
+    // One repo's hand-edited config must not be able to abort a loop over every
+    // other repo in the installation. The throw is still loud, just contained.
+    write("octocat", "bad", { incidents: [{ start: "nonsense", end: "2026-07-24T00:00:00Z", reason: "typo" }] });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = loadRepoConfigIsolated(dataDir, "octocat", "bad");
+    const logged = err.mock.calls.map((c) => c.join(" ")).join("\n");
+    err.mockRestore();
+    expect(result).toBeNull();
+    expect(logged).toMatch(/octocat\/bad/);
+    expect(logged).toMatch(/typo/);
+  });
+
+  it("does not fall back to defaults, which would hide the misconfiguration", () => {
+    write("octocat", "bad", { incidents: "yes" });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = loadRepoConfigIsolated(dataDir, "octocat", "bad");
+    err.mockRestore();
+    expect(result).toBeNull();
+  });
+});
+
+describe("repo cluster must be an object", () => {
+  it("rejects a string, which would otherwise spread its character indices", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prism-cluster-str-"));
+    const d = join(dir, "octocat-my-repo");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "config.json"), JSON.stringify({ cluster: "acme" }));
+    try {
+      expect(() => loadRepoConfig(dir, "octocat", "my-repo")).toThrow(/cluster must be an object/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
