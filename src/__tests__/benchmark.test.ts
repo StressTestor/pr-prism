@@ -349,7 +349,9 @@ describe.sequential("benchmark provider selection", () => {
       expect(fetchMock).toHaveBeenCalledTimes(3);
 
       const store = new VectorStore(benchmarkDatabasePath("owner/repo", "ollama", "local-model", 2));
-      expect(Array.from(store.getAllEmbeddings("owner/repo").values())[0]).toEqual(new Float32Array([0.5, 0.5]));
+      expect(Array.from(store.getAllEmbeddings("owner/repo").values())[0]).toEqual(
+        new Float32Array([1 / Math.SQRT2, 1 / Math.SQRT2]),
+      );
       store.close();
     } finally {
       process.chdir(originalCwd);

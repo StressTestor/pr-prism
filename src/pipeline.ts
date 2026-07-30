@@ -18,7 +18,7 @@ import { classifyClusterRelation } from "./relations.js";
 import { escapeTableCell, sanitizeTitle } from "./sanitize.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
 import { cosineSimilarity, isZeroVector } from "./similarity.js";
-import { VectorStore } from "./store.js";
+import { VECTOR_GEOMETRY_VERSION, VectorStore } from "./store.js";
 import type { EmbeddingProvider, PipelineContext, PRItem, StoreItem } from "./types.js";
 import { checkVisionAlignment } from "./vision.js";
 import { createWriteGate, resolveWriteMode } from "./write-gate.js";
@@ -109,6 +109,11 @@ export async function reEmbedStoredItems(
   store.setMeta("embedding_provider", providerConfig.provider);
   store.setMeta("embedding_config_hash", effectiveEmbeddingConfigHash(providerConfig, embedder.dimensions));
   store.setMeta("schema_version", "1");
+  // Every vector was just rewritten through upsertEmbeddingOnly, which
+  // normalises, so the store now satisfies the current geometry. Without this
+  // the guard would keep refusing a database the re-embed had already fixed,
+  // and the guard's own error message tells people to run this command.
+  store.setMeta("vector_geometry_version", VECTOR_GEOMETRY_VERSION);
 }
 
 export async function runScan(

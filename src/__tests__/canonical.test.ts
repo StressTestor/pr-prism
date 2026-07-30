@@ -376,3 +376,46 @@ describe("incident-closed lifecycle ranking", () => {
     expect(selectCanonical(items).number).toBe(31);
   });
 });
+
+describe("incident-closed ranks between open and closed", () => {
+  // Promoting an incident-closed PR to open-equivalent overshoots. On the
+  // odysseus corpus that motivated the feature the tiers are 993 open, 1347
+  // merged, 2945 closed; a ~900-item incident promoted wholesale roughly
+  // doubles the open tier, which is the tier the tool exists to order.
+  // It never got a maintainer verdict, so it outranks a deliberate close, but
+  // it is not evidence of live work the way a genuinely open PR is.
+  const pr = (over: Record<string, unknown>) => c({ type: "pr", ...over } as never);
+
+  it("prefers a genuinely open PR over an incident-closed one", () => {
+    const picked = decideCanonical(
+      [
+        pr({ number: 5559, state: "closed", incidentClosed: true, score: 0.9 }),
+        pr({ number: 5560, state: "open", score: 0.1 }),
+      ],
+      { mode: "pr" },
+    ).canonical;
+    expect(picked.number).toBe(5560);
+  });
+
+  it("prefers an incident-closed PR over a deliberately closed one", () => {
+    const picked = decideCanonical(
+      [
+        pr({ number: 5561, state: "closed", score: 0.9 }),
+        pr({ number: 5562, state: "closed", incidentClosed: true, score: 0.1 }),
+      ],
+      { mode: "pr" },
+    ).canonical;
+    expect(picked.number).toBe(5562);
+  });
+
+  it("still prefers merged over everything", () => {
+    const picked = decideCanonical(
+      [
+        pr({ number: 5563, state: "closed", incidentClosed: true, score: 0.9 }),
+        pr({ number: 5564, state: "merged", score: 0.1 }),
+      ],
+      { mode: "pr" },
+    ).canonical;
+    expect(picked.number).toBe(5564);
+  });
+});

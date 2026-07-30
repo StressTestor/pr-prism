@@ -61,17 +61,23 @@ export interface CanonicalDecision<T> {
  * all ties here and falls through to the score/date rules unchanged.
  *
  * Takes the whole candidate rather than the bare state so an incident-closed
- * item can be ranked where it sat before the incident.
+ * item can be ranked on its own tier.
+ *
+ * Incident-closed sits between open and closed rather than being promoted to
+ * open outright. It never got a maintainer verdict, so it must outrank a
+ * deliberate close; but it is not evidence of live work the way an open PR is,
+ * and a repository-wide event closes items in bulk. On the corpus this feature
+ * was built for the tiers are 993 open, 1347 merged, 2945 closed, so promoting
+ * a ~900-item incident to open-equivalent roughly doubles the tier the ranking
+ * exists to order.
  */
 function statePriority(candidate: { state?: string; incidentClosed?: boolean }): number {
-  // An incident-closed item never reached a maintainer verdict, so it is ranked
-  // where it sat before the incident rather than as a rejection.
-  const state = candidate.state === "closed" && candidate.incidentClosed ? "open" : candidate.state;
-  switch (state) {
+  if (candidate.state === "closed" && candidate.incidentClosed) return 2;
+  switch (candidate.state) {
     case "merged":
-      return 3;
+      return 4;
     case "open":
-      return 2;
+      return 3;
     case "closed":
       return 1;
     default:
