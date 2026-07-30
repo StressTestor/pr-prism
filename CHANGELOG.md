@@ -2,31 +2,123 @@
 
 all notable changes to pr-prism are documented here.
 
-## [unreleased]
+## [4.0.0] - 2026-07-30
+
+### upgrading
+
+**your existing database will refuse to search until you convert it.** vectors are now
+normalised on write and similarity is derived as `1 - d^2/2`, so a store written by 3.x holds
+raw vectors that the new formula would read as confidently wrong similarities. `search()` throws
+with an actionable message rather than answering. two ways out:
+
+```
+prism re-embed          # re-embeds and stamps the new geometry
+```
+
+or call `backfillVectorGeometry()` to normalise in place without re-embedding, which is fast and
+does not touch your provider.
+
+**cluster counts change enormously.** on a 5285-item corpus at the same 0.85 threshold, 26
+clusters became 501. that is the bug below being fixed, not a threshold change. anything
+consuming the JSON, or acting on the counts, will see roughly 20x more clusters from the same
+input. any cluster count you recorded from 3.x on a corpus of 5000+ items is not comparable.
+
+**breaking API changes** for anyone importing the library rather than using the CLI:
+
+- `RepoConfig` gains required `incidents` and `cluster`
+- `WeeklyDigestConfig` loses `similarityThreshold` and `autoClose` (the first is now read per
+  repo, the second had no reader)
+- `itemMetadata()` returns a named `ItemMetadata` type instead of `Record<string, unknown>`
+- `VectorStore`'s fourth constructor argument is an options object
+- `statePriority()` ranks four tiers instead of three
 
 ### fixed
-- **duplicate detection was finding a fraction of the duplicates on any corpus of 5000+ items.** three compounding bugs. the `vec0` table is declared without a distance metric, so sqlite-vec returns L2, but `store.search` filtered `1 - distance >= threshold`, which is not cosine at any scale. nothing normalised vectors on write, so that conversion was not even valid to attempt. and `cluster.ts` routed 5000+ items through a candidate-limited path that passed the clustering threshold into that same wrong-scale filter, then truncated whatever survived to K=50. measured on a real 5285-item corpus: **26 clusters found where exact pairwise finds 501**, and the "optimisation" was *slower* (20.6s vs 9.3s). vectors are now normalised on write, similarity is derived as `1 - d^2/2`, and the candidate-limited path is gone - `vec0` KNN is itself a full scan with a `LIMIT`, so there was never an index to approximate with. closes #19
-- stores written before this carry raw vectors and are refused by `search()` with an actionable message rather than answered with confidently wrong similarities. `prism re-embed` clears it, or `backfillVectorGeometry()` converts in place without re-embedding
-- **any cluster count published before this is not comparable.** the model benchmark numbers in particular measured near-exact-duplicate detection, not duplicate detection at the configured threshold
+
+- **duplicate detection was finding a fraction of the duplicates on any corpus of 5000+ items.**
+  three compounding bugs. the `vec0` table is declared without a distance metric, so sqlite-vec
+  returns L2, but `store.search` filtered `1 - distance >= threshold`, which is not cosine at any
+  scale. nothing normalised vectors on write, so that conversion was not valid to attempt anyway.
+  and `cluster.ts` routed 5000+ items through a candidate-limited path that passed the clustering
+  threshold into that same wrong-scale filter, then truncated whatever survived to K=50. measured
+  on a real 5285-item corpus: **26 clusters found where exact pairwise finds 501**, and the
+  "optimisation" was *slower* (20.6s against 9.3s). vectors are normalised on write, similarity is
+  derived, and the candidate-limited path is gone: `vec0` KNN is itself a full scan with a `LIMIT`,
+  so there was never an index to approximate with. closes #19
+- the webhook path no longer overwrites what a scan learned. `server/triage.ts` wrote
+  `metadata: { author, state }` wholesale, and because `upsert` replaces `metadata_json` outright,
+  a `pull_request.opened` webhook draining after a backlog scan dropped every other field the scan
+  had stored (labels, diff size, ci status, closing refs, `authorIsBot`). it now writes only the
+  fields the event can actually observe and leaves the rest of the row alone
+- the weekly digest reads per-repo settings instead of a global copy. it was passed
+  `DEFAULT_REPO_CONFIG.similarityThreshold` and clustered *every* repo at the default, ignoring
+  whatever that repo had configured, so its cluster counts disagreed with the backlog scan's for
+  the same repo
+- one unusable `config.json` no longer aborts the whole installation loop. a repo whose config
+  cannot be honoured is skipped loudly and by name; the repos after it in the list still get
+  scanned
 
 ### changed
-- the `cluster` block (bot filtering) now reaches the server/GitHub-App path, declared per repo in that repo's `config.json` alongside `incidents`. previously a repo-specific bot login was honoured by the CLI and silently ignored by the App. note the key names differ by file format: the CLI's yaml uses `cluster.bot_authors` / `cluster.include_bot_authors`, the App's json uses `cluster.botAuthors` / `cluster.includeBotAuthors`, matching each file's existing convention, so the same repo produced different clusters depending on which path you looked at. closes #27
-- the weekly digest reads per-repo settings instead of a global copy. it was passed `DEFAULT_REPO_CONFIG.similarityThreshold` and clustered *every* repo at the default, ignoring whatever that repo had configured, so its cluster counts disagreed with the backlog scan's for the same repo. `WeeklyDigestConfig` loses `similarityThreshold` and `autoClose`: the first now comes from the repo, the second was already dead
-- incident windows now work on the server/GitHub-App path, not just the CLI. declare them per repo under `incidents` in `{dataDir}/{owner}-{repo}/config.json`. a readable config carrying a malformed window throws on load rather than quietly loading as "no incident", which would rank the affected backlog as rejected. a backlog scan fetches closed items only for repos that declare a window: a window matches on `closedAt`, so without one the extra API calls buy nothing. part of #27
-- the webhook path no longer overwrites what a scan learned. `server/triage.ts` wrote `metadata: { author, state }` wholesale, and because `upsert` replaces `metadata_json` outright, a `pull_request.opened` webhook draining after a backlog scan dropped every other field the scan had stored (labels, diff size, ci status, closing refs, `authorIsBot`). it now writes only the fields the event can actually observe and leaves the rest of the row alone. field names come from the shared `itemMetadata()`, and a name that is not part of it throws rather than silently creating a key nothing reads. part of #27
-- incident-closed PRs now rank *between* open and closed rather than as fully open. an item closed by a repository-wide event never got a maintainer verdict, so it must outrank a deliberate close, but it is not evidence of live work the way an open PR is. on the corpus this feature was built for the tiers are 993 open / 1347 merged / 2945 closed, so promoting a ~900-item incident to open-equivalent roughly doubled the tier the ranking exists to order
-- bot-authored items are excluded from clustering by default. automation reuses titles for unrelated content - dependabot files "chore(deps): bump the npm group with 2 updates" week after week - so consecutive bot PRs embed as near-identical and surfaced as duplicates nobody could act on. measured on odysseus-dev/odysseus: every false positive among the extra clusters a high-recall model found was a recurring bot PR, and filtering removed exactly those and nothing else. (the cluster counts originally quoted here were measured before the vector-geometry fix below and are not comparable; the bot PRs were identified by author, which that bug does not affect.) set `cluster.include_bot_authors: true` to restore the old behaviour, or list repo-specific automation under `cluster.bot_authors` when a self-hosted bot is not in the built-in list. applies to confirmed (identity) clusters too, not just fuzzy ones
-- confirmed (identity) duplicate clusters now pick canonical by earliest-created instead of quality score: byte-identical duplicates are a which-was-first question, and a copied PR can outscore the original it was lifted from. fuzzy clusters keep the state/CI/score rule. starmap `canonical`/`contested` for confirmed clusters shift accordingly (value change, schema stays v1)
+
+- incident-closed PRs rank *between* open and closed rather than as fully open. an item closed by
+  a repository-wide event never got a maintainer verdict, so it outranks a deliberate close, but it
+  is not evidence of live work the way an open PR is. on the corpus this was built for the tiers
+  are 993 open / 1347 merged / 2945 closed, so promoting a ~900-item incident to open-equivalent
+  roughly doubled the tier the ranking exists to order
+- bot-authored items are excluded from clustering by default. automation reuses titles for
+  unrelated content, so consecutive bot PRs embed as near-identical and surfaced as duplicates
+  nobody could act on. set `cluster.include_bot_authors: true` to restore the old behaviour, or
+  list repo-specific automation under `cluster.bot_authors`. applies to confirmed (identity)
+  clusters and to the App's webhook triage, which previously commented on a bot's PR telling it
+  the bot had duplicated itself
+- the server/GitHub-App path honours incident windows and the `cluster` block, declared per repo
+  in that repo's `config.json`. key names follow each file's own convention: the CLI's yaml uses
+  `cluster.bot_authors` / `cluster.include_bot_authors`, the App's json uses `cluster.botAuthors` /
+  `cluster.includeBotAuthors`. closes #27
+- confirmed (identity) duplicate clusters pick canonical by earliest-created instead of quality
+  score: byte-identical duplicates are a which-was-first question, and a copied PR can outscore the
+  original it was lifted from. fuzzy clusters keep the state/CI/score rule
 
 ### added
-- scans record `authorIsBot` from github's own account type (graphql `__typename`, rest `user.type`) rather than guessing. rows scanned before this field fall back to a login check, so bot filtering works without a rescan
-- `prism benchmark --include-bot-authors` clusters bot-authored items too. the benchmark has no `prism.config.yaml` in scope, so without this it could only ever measure the filtered default - which is the wrong tool for asking what filtering actually changes. applies to the cluster counts and the recorded membership together, so the two cannot disagree
-- `prism benchmark --out <path>` writes a run's results to a chosen file. every run previously wrote `data/benchmark-results.json`, so a second run silently destroyed the first one's numbers - an hour of embedding lost to starting the next comparison. an empty or directory-shaped value is rejected rather than falling back to the default
-- benchmark results now record `clusterMembership` per model per threshold. cluster counts cannot tell you whether a model finding more clusters is catching real duplicates or chaining unrelated items, and re-deriving membership means re-embedding the whole corpus
-- starmap items now carry `createdAt` alongside `updatedAt` (additive), so consumers can render and reason about which-was-first without re-fetching from github. star-map's importer rejects unknown fields; the coordinated patch is star-map PR #11, which must land before it consumes a dataset carrying this field
-- incident-aware ranking: `prism.config.yaml` accepts an `incidents:` list of `{start, end, reason}` windows. a repository-wide event (visibility flip, bulk close, migration) closes items for reasons unrelated to their quality, and because `selectCanonical()` ranks lifecycle state before score those items sank below genuinely-closed siblings, inverting triage order for exactly the backlog a maintainer needs. PRs closed inside a window now rank as open. `closedAt` is captured from both API paths and stored in `metadata_json` (no schema migration); `incidentClosed` is derived at read time, so correcting a window is a config edit rather than a rescan. window bounds require an explicit UTC offset and are rejected at load if unparseable or inverted. an offset-less timestamp parses in the host timezone and would select different PRs on a laptop than in CI. starmap carries `incidentClosed: true` on items *and* on every reference to them (canonical, runnerUp, partition, tracker ref and candidates), omitted when false. a consumer contract has to accept it in all of those positions, not just on items. the server/GitHub-App path honours windows too, declared per repo in that repo's `config.json` (#27). NOTE for star-map: same coordinated importer patch as `createdAt` below, since its importer rejects unknown fields
-- `server/scheduler.ts` now builds stored metadata with the shared `itemMetadata()` instead of its own literal. the hand-rolled copy had already drifted behind the real one, so items scanned by the App path were missing fields the CLI path stored. `server/triage.ts` still hand-rolls its own and is tracked in #27
-- NOTE: rows scanned before this release carry no `closedAt`, and a default scan only fetches open items. run `prism scan --state all` to pick them up. this is per-incident, not a one-time backfill: a default scan fetches open items only, so after a bulk close the affected PRs are no longer returned at all and their stored rows keep `state: open` with no `closedAt`. re-scan with `--state all` after each incident, or the window matches nothing
+
+- incident-aware ranking. `prism.config.yaml` accepts an `incidents:` list of
+  `{start, end, reason}` windows. a repository-wide event (visibility flip, bulk close, migration)
+  closes items for reasons unrelated to their quality, and because `selectCanonical()` ranks
+  lifecycle state before score, those items sank below genuinely-closed siblings, inverting triage
+  order for exactly the backlog a maintainer needs. `closedAt` is captured from both API paths and
+  stored in `metadata_json` (no schema migration); `incidentClosed` is derived at read time, so
+  correcting a window is a config edit rather than a rescan. window bounds require an explicit UTC
+  offset and are rejected at load if unparseable or inverted, because an offset-less timestamp
+  parses in the host timezone and would select different PRs on a laptop than in CI
+- starmap carries `incidentClosed: true` on items *and* on every reference to them (canonical,
+  runnerUp, partition, tracker ref and candidates), omitted when false. a consumer contract has to
+  accept it in all of those positions
+- starmap items carry `createdAt` alongside `updatedAt`, so consumers can reason about
+  which-was-first without re-fetching from github
+- scans record `authorIsBot` from github's own account type (graphql `__typename`, rest
+  `user.type`) rather than guessing. rows scanned before this field fall back to a login check, so
+  bot filtering works without a rescan
+- `prism benchmark --out <path>` writes a run's results to a chosen file. every run previously
+  wrote `data/benchmark-results.json`, so a second run silently destroyed the first one's numbers
+- `prism benchmark --include-bot-authors` clusters bot-authored items too, since the benchmark has
+  no `prism.config.yaml` in scope and could otherwise only ever measure the filtered default
+- benchmark results record `clusterMembership` per model per threshold. cluster counts cannot tell
+  you whether a model finding more clusters is catching real duplicates or chaining unrelated
+  items, and re-deriving membership means re-embedding the whole corpus
+- embedding models that expect an instruction prefix get one (`embeddinggemma`).
+  `EMBEDDING_TEXT_VERSION` bumps to 3 so prefixed and unprefixed vectors cannot be mixed. measured
+  effect on clustering for this workload: none, kept because it is what the model documents
+
+### for contributors
+
+- `server/scheduler.ts` builds stored metadata with the shared `itemMetadata()` instead of its own
+  literal, which had drifted behind by three fields
+- a backlog scan fetches closed items only for repos that declare an incident window, bounded by
+  the earliest window start. open and closed are fetched separately because `since` aborts a fetch
+  at the first item older than it, so bounding a combined `state:"all"` call would drop untouched
+  open PRs
+- note for existing installs: rows scanned before this release carry no `closedAt`, and a default
+  scan fetches open items only. run `prism scan --state all` after an incident, or the window
+  matches nothing. this is per-incident, not a one-time backfill
 
 ## [3.1.0] — 2026-07-20
 

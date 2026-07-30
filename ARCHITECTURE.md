@@ -35,7 +35,7 @@ src/                    # CLI tool (published to npm as prism-triage)
   canonical.ts          # selectCanonical()/decideCanonical() source-of-truth pick (merged preferred) + contested; selectTracker() original-bug + fix/duplicate candidates
   identity.ts           # findConfirmedDuplicates(): deterministic non-embedding dupe tier (same head-oid / patch-id)
   relations.ts          # classifyClusterRelation(): deterministic member-relationship label per cluster (pr-issue-linked/-unlinked via github closing edges, prs-only, issues-only) + resolved in-cluster closingEdges; relation omitted when any member PR predates the closesIssues scan field (absent = unknown, never "closes nothing")
-  similarity.ts         # ANN pre-filtering, matryoshka truncation
+  similarity.ts         # exact cosine + zero-vector guard
   sanitize.ts           # title/theme emit sanitizer: strip control/ANSI, escape markdown table cells (row-injection defense)
   scorer.ts             # 7 quality signals: tests, CI, diff size, author history, etc. hasTests credit is gated on CI (a red build earns no test credit - failing tests are not coverage)
   starmap.ts            # stable star-map JSON contract: clusters + minSim/confidence/partition/contested+runnerUp + tracker(original bug + fix/duplicate candidates) + item state (open/closed/merged) + relation/closingEdges/closes (deterministic, from relations.ts) + embeddingModel/provider/dims/configHash + node ids + (repo,number) join key
@@ -46,8 +46,10 @@ src/                    # CLI tool (published to npm as prism-triage)
   write-gate.ts         # one dry-run-by-default gate every GitHub mutation funnels through (read-only ethos)
   benchmark.ts          # embedding provider benchmark tool (--out per-run results + cluster membership)
   bots.ts               # bot-author detection; excluded from clustering by default
-  # store.ts: vectors are normalised on write; similarity is 1 - d^2/2 because
-  # vec0 is L2. VECTOR_GEOMETRY_VERSION guards stores written before that.
+  # store.ts: vectors are normalised on write and similarity is derived as
+  # 1 - d^2/2, because vec0 is declared without a distance metric and so
+  # returns L2. VECTOR_GEOMETRY_VERSION refuses a store written before that.
+  # clustering compares every pair exactly; there is no approximate path.
   incident.ts           # incident windows: compile once, match closedAt at read time
   metadata.ts           # the stored-metadata shape, shared by the CLI and App paths
   config.ts             # Zod-validated YAML + env config
