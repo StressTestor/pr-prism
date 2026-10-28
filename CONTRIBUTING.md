@@ -12,7 +12,12 @@ npm run build
 npm test
 ```
 
-requires node >= 20. run `node --version` to check.
+requires node >= 22. run `node --version` to check.
+
+the minimum is Node 22 (rather than an earlier version) because the
+`@typesafe-ai/sdk` dependency and other runtime requirements rely on
+Node 22 APIs and behaviour. Node 20 is outside the declared deployment
+contract and is not supported.
 
 ## project structure
 

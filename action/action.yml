@@ -41,6 +41,15 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: Verify Node.js version
+      shell: bash
+      run: |
+        NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
+        if [ "$NODE_MAJOR" -lt 22 ]; then
+          echo "::error::pr-prism requires Node.js >= 22.0.0 (found $(node --version)). Please configure actions/setup-node with node-version: 22 in your workflow."
+          exit 1
+        fi
+
     - name: Install prism-triage
       shell: bash
       run: npm install -g prism-triage

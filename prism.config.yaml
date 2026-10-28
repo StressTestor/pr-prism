@@ -52,5 +52,12 @@ labels:
   off_vision: "prism:off-vision"
   top_pick: "prism:top-pick"
 
+# Typed Decision Layer (Phase 1, optional, disabled by default)
+# decisions:
+#   enabled: false
+#   provider: jev
+#   model: jev-1.14.0
+#   timeout_ms: 10000
+
 batch_size: 50
 max_prs: 5000

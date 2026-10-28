@@ -147,6 +147,77 @@ cross-repo dupe display: `[owner/repo1] #1234 <-> [owner/repo2] #567`
 | LLM | anthropic | paid | |
 | LLM | kimi | free tier | |
 | LLM | ollama | free | local |
+| decision | jev (TypeSafe AI) | paid (opt-in) | System One model (`jev-1.14.0`) for typed decisions, disabled by default |
+| decision | mock | free | deterministic offline testing provider |
+
+## typed decisions (phase 1)
+
+pr-prism includes an optional, model-agnostic **Typed Decision Layer** powered by TypeSafe AI's Jev (`jev-1.14.0`). It computes structured categorical selections and calibrated probabilities (`Choice`, `Score`, `Noul`) to help classify items and recommend advisory triage paths.
+
+### key principles
+
+- **disabled by default**: pr-prism starts with zero network calls to paid inference APIs. Existing scans, duplicate clustering, ranking, and reviews are completely unchanged. The presence of `TYPESAFE_API_KEY` does **not** activate Jev; typed decisions remain disabled unless `decisions.enabled: true` in `prism.config.yaml` or `DECISION_ENABLED=true` in `.env` is explicitly configured. Normal startup makes zero TypeSafe requests.
+- **four orthogonal dimensions**:
+  1. *PR Quality*: deterministic signals from `scorer.ts` (CI status, test coverage, diff size).
+  2. *Product Relevance*: semantic alignment from `vision.ts` (`VISION.md` embedding similarity).
+  3. *Evidence Quality*: rubric scores assessing reproduction steps and description completeness.
+  4. *Technical Severity & Risk*: rubric scores and calibrated risk nouls (security risk, breaking change).
+- **strictly advisory**: model probabilities never authorize PR closure, approval, or rejection. Low reproduction evidence routes to `needs_reproduction` or `maintainer_triage`, never automated closure. Missing or unevaluated risk assessments are explicitly represented as `null` rather than assumed zero, and unknown security risks trigger safe escalation.
+- **trusted metadata first**: deterministic fields already established by GitHub (such as `pr` vs `issue` type and bot status) are authoritative and consumed directly from GitHub metadata; model responses can never override `PRItem.type`.
+- **untrusted input defense & bounded limits**: contributor text is strictly sanitized and length-bounded before model evaluation:
+  - Titles: bounded to 500 characters in decision context (display tables cap at 256 characters).
+  - Bodies: bounded to 16,000 characters (~4k tokens) with clean `[...truncated for decision context]` marker.
+  - Metadata: repo (200 chars), author (100 chars), state (50 chars), labels (100 chars each).
+  - Secrets: credentials and API keys matching common patterns are redacted to `[REDACTED_SECRET]`.
+  - ANSI escapes and non-printable control characters are stripped; Unicode normalized (NFC).
+  - Provenance: SHA-256 fingerprinting of input state, question rubrics, and model versions ensures tamper-evident audit trails.
+- **repository generality**: uses a universal generic domain taxonomy (`core_logic`, `api_service`, `ui_ux`, `data_storage`, `integrations`, `ci_infra`, `documentation`, `other`) suitable for arbitrary GitHub repositories, with configurable domain taxonomy overrides.
+
+### configuration
+
+In `prism.config.yaml`:
+```yaml
+decisions:
+  enabled: true
+  provider: jev
+  model: jev-1.14.0
+  timeout_ms: 10000
+```
+
+In `.env`:
+```bash
+TYPESAFE_API_KEY=your_typesafe_api_key_here
+```
+
+### programmatic usage (with mock inference)
+
+```typescript
+import { createDecisionProvider, evaluateItemDecisions } from "prism-triage";
+
+// Deterministic offline evaluation without network calls
+const provider = createDecisionProvider({ provider: "mock" });
+
+const report = await evaluateItemDecisions(
+  {
+    number: 42,
+    type: "issue",
+    repo: "owner/repo",
+    title: "App crashes when vector store table is missing",
+    body: "Steps to reproduce: 1. Delete data/prism.db 2. Run prism stats",
+    author: "contributor",
+    createdAt: "2026-10-26T00:00:00Z",
+    updatedAt: "2026-10-26T00:00:00Z",
+    labels: ["bug"],
+    state: "open",
+  },
+  provider,
+);
+
+console.log(report.classification); // { category: "bug", technicalDomain: "data_storage" }
+console.log(report.item.type);      // "issue" (resolved from trusted metadata)
+console.log(report.advisoryRoute);  // "maintainer_triage"
+console.log(report.provenance);     // { provider: "mock", model: "mock-jev-1.14.0", inputHash: "...", rubricHash: "...", decisionIdentity: "..." }
+```
 
 OpenAI-compatible embedding and chat endpoints use the existing generic `openai` provider. Featherless.ai is one tested
 compatible endpoint; it does not require a dedicated provider name or vendor-specific environment variables.
@@ -235,12 +306,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: StressTestor/pr-prism@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           embedding-provider: jina
           embedding-api-key: ${{ secrets.JINA_API_KEY }}
 ```
+
+> **Node.js runtime requirement**: pr-prism requires Node.js >= 22.0.0 (Node 22 or 24 LTS recommended). Workflows invoking the composite GitHub Action must include `actions/setup-node@v4` with `node-version: 22` to ensure a compatible runtime.
 
 on pull_request events, prism checks if the new PR is a duplicate and comments with matches. on schedule, it does a full triage scan.
 
@@ -333,3 +409,44 @@ see [CONTRIBUTING.md](CONTRIBUTING.md)
 ## license
 
 MIT
+
+### V5 review operations
+
+Build locally with Node 22 or newer: `npm ci && npm run build`; invoke `node dist/cli.js` (or install the local package in an isolated project). Native backlog operations require an explicit repository and a separate V5 data directory:
+
+```sh
+export PRISM_DATA_DIR=./review-data
+# GITHUB_TOKEN supplies read-only repository access.
+node dist/cli.js review --all-open --repo example/project --type pr --dry-run --json
+node dist/cli.js review --all-open --repo example/project --type pr --max-new-calls 60 --run-id batch-1
+node dist/cli.js review --dashboard --repo example/project --type pr --refresh 5
+node dist/cli.js review --operations --status --repo example/project --type issue --json
+```
+
+Configure `PRISM_REVIEW_ACCOUNTS` as a JSON array, for example
+`[{"id":"account-a","model":"your-model","endpoint":"https://provider.example/v1/chat/completions","keyEnv":"REVIEW_API_KEY"}]`,
+and supply the corresponding credential through that environment variable. Up to three distinct account IDs share durable attempt accounting. A failed or interrupted outbound attempt consumes budget. Resume with the same `--run-id`, budget and `--resume`; a new run ID authorizes a new bounded budget. Dry-run, status and dashboard dispatch no paid calls. Dry-run does persist its read-only GitHub inventory locally.
+
+Use `--type issue` for the issue evidence contract. Saved findings are unverified recommendations requiring independent source/test confirmation. Operations never post or merge. Complete PR coverage requires verified pinned sources and a complete changed-file manifest. Binary/unavailable evidence is reported as partial. Use `review --recover --repo example/project --type pr` to recover expired local work without inference; uncertain requests remain charged and require explicit `--acknowledge-uncertain ATTEMPT_ID` before retry planning. See the recorded integration verdict in the acceptance report; see [design](V5_REVIEW_OPERATIONS_DESIGN.md), [acceptance](V5_REVIEW_OPERATIONS_ACCEPTANCE.md) and [offline import plan](V5_REVIEW_OPERATIONS_IMPORT_PLAN.md).
+
+
+V5 hardening uses metadata-only inventory for backlog discovery. `inventoryKnown` counts items whose
+conversation/source evidence has not been inspected; these cannot count as completed reviews.
+Full evidence is hydrated only for selected reviews, then revalidated before each reserved request
+and final completion. Periodic probes apply to previously hydrated items and detect comment deletion,
+linked-fix changes and external actions. Unchanged metadata alone does not verify a conversation.
+Probes rotate over at most 100 hydrated items per invocation; large hydrated backlogs need multiple
+invocations for a complete verification cycle. A 403/429 records a persistent reset/Retry-After cooldown and leaves the reliable cursor unchanged;
+retry the command after that time. Permission failures also fail closed and may require token repair.
+
+V4 queue inspection remains `prism review --queue-db PATH --status --json`. V5 inspection requires
+`prism review --operations --status --repo OWNER/REPO --type pr --json` (or `--operations-db PATH`).
+Bare `review --status` reports a selector error without loading credentials. Modes cannot be mixed.
+Issue classification through `scan`/`dupes` remains embedding-first; deep issue reviews are optional
+and require explicit review execution. V5 does not import or reuse the external Python PR reviews.
+
+The package now consistently declares Node >=22, matching `@typesafe-ai/sdk@0.7.0`'s engine contract
+and the existing V4 runtime documentation. This is a deliberate compatibility change from upstream's
+Node >=20 contract, to be highlighted in the upstream PR. Passing diagnostic Node 20 tests does not
+establish supported SDK operation on Node 20. Package name/version remain `prism-triage@4.0.0`;
+this branch is a review candidate, not a published release.

@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,8 +7,7 @@ import { VectorStore } from "../store.js";
 import type { PRItem, StoreItem } from "../types.js";
 
 function tmpDb(): string {
-  const dir = resolve(tmpdir(), `prism-cluster-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  mkdirSync(dir, { recursive: true });
+  const dir = mkdtempSync(resolve(tmpdir(), "prism-cluster-"));
   return resolve(dir, "test.db");
 }
 

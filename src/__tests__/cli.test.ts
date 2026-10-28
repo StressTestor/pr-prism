@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { createProgram, program } from "../cli.js";
 
-// parseDuration is exported from cli.ts but importing it triggers program.parse()
-// so we inline the function here for unit testing
 function parseDuration(s: string): string {
   const match = s.match(/^(\d+)(d|w|m)$/);
   if (!match) throw new Error(`Invalid duration: ${s}. Use format like 7d, 2w, 1m`);
@@ -47,5 +46,20 @@ describe("parseDuration", () => {
     const result = parseDuration("1d");
     expect(() => new Date(result)).not.toThrow();
     expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+describe("cli program exports and execution safety", () => {
+  it("exports program singleton without side effects on import", () => {
+    expect(program).toBeDefined();
+    expect(program.name()).toBe("prism");
+    expect(program.commands.length).toBeGreaterThan(10);
+  });
+
+  it("exports createProgram factory producing clean command instances", () => {
+    const instance = createProgram();
+    expect(instance).toBeDefined();
+    expect(instance.name()).toBe("prism");
+    expect(instance.commands.length).toBe(program.commands.length);
   });
 });

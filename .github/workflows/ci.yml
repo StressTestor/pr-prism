@@ -10,8 +10,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [20.x, 22.x]
+        node-version: [22.x, 24.x]
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -28,9 +29,47 @@ jobs:
 
       - run: npm run lint
 
+      - run: npm run typecheck
+
       - run: npm test
 
       - name: Smoke test
         run: |
           node dist/cli.js --version
           node dist/cli.js --help
+
+  linux-sandbox-verification:
+    # Verify real OS-level network isolation on a capable Linux runner.
+    # Pinned to ubuntu-22.04 runner image where unprivileged user namespaces
+    # are supported without AppArmor namespace restrictions.
+    # Bubblewrap is provisioned through ordinary package installation.
+    # STRICT_NETWORK_ISOLATION=1 ensures any inability to establish verified
+    # isolation fails the job rather than being silently skipped.
+    runs-on: ubuntu-22.04
+    needs: build
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Install bubblewrap
+        run: sudo apt-get install -y bubblewrap
+
+      - name: Probe bwrap capability
+        run: |
+          bwrap --version
+          bwrap --unshare-net --dev-bind / / true
+          echo "bwrap probe: OK"
+
+      - name: Run OS isolation test under strict mode
+        run: npx vitest run --reporter=verbose src/__tests__/orchestrated-e2e.test.ts
+        env:
+          STRICT_NETWORK_ISOLATION: "1"

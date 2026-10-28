@@ -4,7 +4,7 @@ import { createEmbeddingProvider, prepareEmbeddingText } from "../src/embeddings
 import { GitHubClient } from "../src/github.js";
 import type { IncidentWindow } from "../src/incident.js";
 import { loadRepoConfig, type RepoClusterConfig } from "./config.js";
-import { itemMetadata } from "../src/metadata.js";
+import { itemMetadata, preserveItemMetadata } from "../src/metadata.js";
 import { escapeTableCell } from "../src/sanitize.js";
 import type { Cluster, PRItem, StoreItem } from "../src/types.js";
 import {
@@ -209,18 +209,18 @@ export async function runBacklogScan(
         for (let j = 0; j < batch.length; j++) {
           const item = batch[j];
           const embedding = new Float32Array(embeddings![j]);
+          const id = `${fullName}:${item.type}:${item.number}`;
+          const existing = store.getItem(id)?.metadata;
+          const metadata = preserveItemMetadata(itemMetadata(item), existing);
           const storeItem: StoreItem = {
-            id: `${fullName}:${item.type}:${item.number}`,
+            id,
             type: item.type,
             number: item.number,
             repo: fullName,
             title: item.title,
             bodySnippet: (item.body || "").slice(0, 2000),
             embedding,
-            // Single source for stored metadata. The hand-rolled literal that
-            // was here had drifted from it, silently dropping bodyLength,
-            // nodeId, headRefOid and closesIssues on every scheduled sync.
-            metadata: itemMetadata(item),
+            metadata,
             createdAt: item.createdAt,
             updatedAt: item.updatedAt,
           };

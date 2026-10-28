@@ -13,7 +13,7 @@ import {
 } from "./embeddings.js";
 import { GitHubClient } from "./github.js";
 import { applyLabelActions, ensureLabelsExist, type LabelAction } from "./labels.js";
-import { itemMetadata } from "./metadata.js";
+import { itemMetadata, preserveItemMetadata } from "./metadata.js";
 import { classifyClusterRelation } from "./relations.js";
 import { escapeTableCell, sanitizeTitle } from "./sanitize.js";
 import { buildScorerContext, rankPRs } from "./scorer.js";
@@ -52,7 +52,10 @@ export function resolveRepos(repoOverride?: string): string[] {
 
 // ── pipeline functions (used by individual commands and triage) ──
 
-export async function createPipelineContext(repoOverride?: string): Promise<PipelineContext> {
+export async function createPipelineContext(
+  repoOverride?: string,
+  options?: { dbPath?: string },
+): Promise<PipelineContext> {
   const config = loadConfig();
   const env = loadEnvConfig();
   const repoStr = repoOverride || config.repo || getRepos(config)[0];
@@ -66,7 +69,7 @@ export async function createPipelineContext(repoOverride?: string): Promise<Pipe
     baseUrl: env.EMBEDDING_BASE_URL,
     dimensions: env.EMBEDDING_DIMENSIONS,
   });
-  const store = new VectorStore(undefined, embedder.dimensions, env.EMBEDDING_MODEL, {
+  const store = new VectorStore(options?.dbPath, embedder.dimensions, env.EMBEDDING_MODEL, {
     incidentWindows: config.incidents ?? [],
   });
   return { config, env, owner, repo, repoFull, github, store, embedder };
@@ -129,7 +132,8 @@ export async function runScan(
 
   if (opts.useRest) {
     // REST fallback — no deep scan signals
-    const rateLimitWarning = github.formatRateLimitWarning(config.max_prs);
+    const estimatedCalls = Math.ceil(config.max_prs / 100) * states.length * 2;
+    const rateLimitWarning = github.formatRateLimitWarning(estimatedCalls);
     if (rateLimitWarning) console.log(chalk.yellow(rateLimitWarning));
 
     for (const state of states) {
@@ -138,7 +142,6 @@ export async function runScan(
         since,
         state,
         maxItems: config.max_prs,
-        batchSize: config.batch_size,
         onProgress: (fetched) => {
           spinner.text = `Fetching ${state} PRs... ${fetched} so far`;
         },
@@ -146,7 +149,7 @@ export async function runScan(
       spinner.succeed(`Fetched ${prs.length} ${state} PRs`);
 
       const issueSpinner = ora(`Fetching ${state} issues...`).start();
-      const issues = await github.fetchIssues({ since, state, maxItems: config.max_prs, batchSize: config.batch_size });
+      const issues = await github.fetchIssues({ since, state, maxItems: config.max_prs });
       issueSpinner.succeed(`Fetched ${issues.length} ${state} issues`);
 
       allItems.push(...prs, ...issues);
@@ -196,7 +199,7 @@ export async function runScan(
         // Unchanged text, but ciStatus/reviewCount/labels/closesIssues drift
         // without bumping updatedAt — keep them current, skip the embedding.
         // Write only on drift so a quiet repo costs zero UPDATEs per scan.
-        const fresh = itemMetadata(item);
+        const fresh = preserveItemMetadata(itemMetadata(item), existing.metadata);
         if (JSON.stringify(fresh) !== JSON.stringify(existing.metadata)) {
           store.refreshMetadata(existing.id, fresh);
         }
@@ -300,6 +303,9 @@ export async function runScan(
       const isZero = embedding.every((v) => v === 0);
       if (isZero) zeroVectors++;
 
+      const existing = store.getByNumber(repoFull, item.number);
+      const metadata = preserveItemMetadata(itemMetadata(item), existing?.metadata);
+
       const storeItem: StoreItem = {
         id: `${repoFull}:${item.type}:${item.number}`,
         type: item.type,
@@ -308,7 +314,7 @@ export async function runScan(
         title: item.title,
         bodySnippet: item.body.slice(0, 500),
         embedding,
-        metadata: itemMetadata(item),
+        metadata,
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       };

@@ -62,7 +62,12 @@ export class VectorStore {
     // Compiled here rather than per item: a malformed window throws now instead
     // of quietly matching nothing on every read.
     this.incidentWindows = compileIncidentWindows(options.incidentWindows ?? []);
-    const p = dbPath || resolve(process.cwd(), "data", "prism.db");
+    const p =
+      dbPath ||
+      process.env.PRISM_DB_PATH ||
+      (process.env.PRISM_DATA_DIR
+        ? resolve(process.env.PRISM_DATA_DIR, "prism.db")
+        : resolve(process.cwd(), "data", "prism.db"));
     mkdirSync(resolve(p, ".."), { recursive: true });
     this.db = new Database(p);
     this.db.pragma("busy_timeout = 5000");
